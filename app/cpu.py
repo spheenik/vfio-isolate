@@ -1,8 +1,11 @@
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import NodeVisitor
-
+from app.fs import read
 
 class _MaskVisitor(NodeVisitor):
+
+    def visit_sentence(self, _, children):
+        return children[0]
 
     def visit_group_form(self, _, children):
         value = children[0]
@@ -68,6 +71,23 @@ class CPUMaskParser:
 
 
 class CPUMask:
+
+    base_path = "/sys/devices/system/cpu"
+    _present = None
+    _possible = None
+
+    @classmethod
+    def present(cls):
+        if not cls._present:
+            cls._present = CPUMask(read(cls.base_path + "/present"))
+        return cls._present
+
+    @classmethod
+    def possible(cls):
+        if not cls._possible:
+            cls._possible = CPUMask(read(cls.base_path + "/possible"))
+        return cls._possible
+
     def __init__(self, initial=None):
         if not initial:
             self.cpus = set()
@@ -76,7 +96,20 @@ class CPUMask:
         else:
             raise Exception("unable to initialize")
 
+    def to_list_representation(self):
+        nums = sorted(self.cpus)
+        gaps = [[s, e] for s, e in zip(nums, nums[1:]) if s + 1 < e]
+        edges = iter(nums[:1] + sum(gaps, []) + nums[-1:])
+        segments = []
+        for r in zip(edges, edges):
+            if r[0] == r[1]:
+                segments.append(str(r[0]))
+            else:
+                segments.append("{}-{}".format(r[0], r[1]))
+        return ",".join(segments)
+
 
 if __name__ == "__main__":
+    print(CPUMask("0013f03f").to_list_representation())
     print(CPUMaskParser.parse("1,3"))
-    print(CPUMaskParser.parse("0003f03f,0003f03f"))
+    print(CPUMask.present().cpus)

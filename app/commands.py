@@ -2,6 +2,9 @@ import argparse
 
 import app
 from app.fs import write
+from app.cpuset import CPUSet
+from app.numa import NumaNode
+from app.cpu import CPUMask
 
 
 class Command:
@@ -34,12 +37,11 @@ class HelpCommand(Command):
         cls.parser.add_argument("help_command", nargs="?", action="store")
 
     def execute(self):
-        print(app.available_command_classes)
-
         if self.help_command:
             if self.help_command in app.available_command_classes:
                 command_class = app.available_command_classes[self.help_command]
                 command_class.parser.print_usage()
+                return
             else:
                 print("The command '{0}' is unknown".format(self.help_command))
 
@@ -65,3 +67,52 @@ class DropCachesCommand(Command):
         write("/proc/sys/vm/compact_memory", "1")
 
 
+class CreatePartition(Command):
+    command_name = "create-partition"
+
+    def __init__(self):
+        self.cpus = None
+        self.numa_node = None
+        self.cpu_exclusive = False
+        self.mem_exclusive = False
+        self.partition_name = None
+
+    @classmethod
+    def create_parser(cls, subparsers: argparse._SubParsersAction):
+        cls.parser = subparsers.add_parser(CreatePartition.command_name, help="create a partition", add_help=False)
+        cls.parser.add_argument("partition_name", help="name of the new partition")
+        group = cls.parser.add_mutually_exclusive_group(required=True)
+        group.add_argument("--cpus", "-c", help="CPUs to use")
+        group.add_argument("--numa-node", "-n", type=int, help="NUMA node to use")
+        cls.parser.add_argument("--cpu-exclusive", "-ce", help="set CPU exclusive", action='store_true')
+        cls.parser.add_argument("--mem-exclusive", "-me", help="set MEM exclusive", default=False, action='store_true')
+
+    def execute(self):
+        if self.numa_node:
+            node = NumaNode(self.numa_node)
+            mask = node.get_cpumask()
+        else:
+            mask = CPUMask(self.cpus)
+
+        cpu_set = CPUSet(self.partition_name)
+        cpu_set.create()
+        cpu_set.set_cpus(mask)
+        if self.cpu_exclusive:
+            cpu_set.set_cpu_exclusive(True)
+        if self.mem_exclusive:
+            cpu_set.set_mem_exclusive(True)
+
+
+class RemovePartition(Command):
+    command_name = "remove-partition"
+
+    def __init__(self):
+        self.partition_name = None
+
+    @classmethod
+    def create_parser(cls, subparsers: argparse._SubParsersAction):
+        cls.parser = subparsers.add_parser(RemovePartition.command_name, help="remove a partition", add_help=False)
+        cls.parser.add_argument("partition_name")
+
+    def execute(self):
+        CPUSet(self.partition_name).remove()
