@@ -1,8 +1,17 @@
+import inspect
 import sys
 import app
 import argparse
+from app.command import Command
 
+# create main parser
 app.main_parser = argparse.ArgumentParser(prog="vfio-isolate", add_help=False)
+
+# find available commands
+app.available_command_classes = {}
+for name, cls in inspect.getmembers(sys.modules["app.commands"]):
+    if inspect.isclass(cls) and Command in cls.__bases__:
+        app.available_command_classes[cls.command_name] = cls
 
 # create parsers for them
 subparsers = app.main_parser.add_subparsers(dest='command')
@@ -26,7 +35,7 @@ while argv:
 
 # run help if there was no command
 if not commands_to_run:
-    commands_to_run.append(app.commands.HelpCommand())
+    commands_to_run.append(app.command.HelpCommand())
 
 # do it
 for command in commands_to_run:

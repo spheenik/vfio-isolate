@@ -1,10 +1,9 @@
 import argparse
 
-import app
-from app.fs import write
+from app import main_parser, available_command_classes
 from app.cpuset import CPUSet
-from app.numa import NumaNode
-from app.cpu import CPUMask
+from app.numanode import NUMANode
+from app.cpumask import CPUMask
 
 
 class Command:
@@ -38,18 +37,18 @@ class HelpCommand(Command):
 
     def execute(self):
         if self.help_command:
-            if self.help_command in app.available_command_classes:
-                command_class = app.available_command_classes[self.help_command]
+            if self.help_command in available_command_classes:
+                command_class = available_command_classes[self.help_command]
                 command_class.parser.print_usage()
                 return
             else:
                 print("The command '{0}' is unknown".format(self.help_command))
 
-        app.main_parser.print_usage()
+        main_parser.print_usage()
         print()
         print("The following commands are available:")
         print()
-        for command_class in app.available_command_classes.values():
+        for command_class in available_command_classes.values():
             print(command_class.command_name)
             command_class.parser.print_usage()
             print()
@@ -63,8 +62,10 @@ class DropCachesCommand(Command):
         cls.parser = subparsers.add_parser(DropCachesCommand.command_name, help="drop caches", add_help=False)
 
     def execute(self):
-        write("/proc/sys/vm/drop_caches", "3")
-        write("/proc/sys/vm/compact_memory", "1")
+        with open("/proc/sys/vm/drop_caches", "w") as f:
+            f.write("3")
+        with open("/proc/sys/vm/compact_memory", "w") as f:
+            f.write("1")
 
 
 class CreatePartition(Command):
@@ -89,7 +90,7 @@ class CreatePartition(Command):
 
     def execute(self):
         if self.numa_node:
-            node = NumaNode(self.numa_node)
+            node = NUMANode(self.numa_node)
             mask = node.get_cpumask()
         else:
             mask = CPUMask(self.cpus)

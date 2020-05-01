@@ -1,19 +1,19 @@
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import NodeVisitor
-from app.fs import read
+
 
 class _MaskVisitor(NodeVisitor):
 
     def visit_sentence(self, _, children):
         return children[0]
 
-    def visit_group_form(self, _, children):
+    def visit_list_form(self, _, children):
         value = children[0]
         for item in children[1]:
             value = value.union(item[1])
         return value
 
-    def visit_group_entry(self, _, children):
+    def visit_list_entry(self, _, children):
         v = children[0]
         if isinstance(v, int):
             return {v}
@@ -22,7 +22,7 @@ class _MaskVisitor(NodeVisitor):
         else:
             raise Exception("don't know how to handle")
 
-    def visit_intlist_form(self, _, children):
+    def visit_mask_form(self, _, children):
         values = [children[0]]
         for item in children[1]:
             values.insert(0, item[1])
@@ -36,7 +36,7 @@ class _MaskVisitor(NodeVisitor):
                 bit = bit + 1
         return result
 
-    def visit_intlist_entry(self, value, _):
+    def visit_mask_entry(self, value, _):
         return int(value.text, 16)
 
     def visit_range(self, _, children):
@@ -52,12 +52,12 @@ class _MaskVisitor(NodeVisitor):
 
 class CPUMaskParser:
     grammar = Grammar(
-        """
-            sentence      = (intlist_form / group_form)
-            group_form    = group_entry (comma group_entry)* 
-            group_entry   = (range / number)
-            intlist_form  = intlist_entry (comma intlist_entry)*
-            intlist_entry = ~"[0-9a-f]{8}"
+            """
+            sentence      = (mask_form / list_form)
+            list_form     = list_entry (comma list_entry)* 
+            list_entry    = (range / number)
+            mask_form     = mask_entry (comma mask_entry)*
+            mask_entry    = ~"[0-9a-f]{8}"
             range         = number minus number
             number        = ~"(0|[1-9][0-9]*)"
             comma         = ","
@@ -79,13 +79,15 @@ class CPUMask:
     @classmethod
     def present(cls):
         if not cls._present:
-            cls._present = CPUMask(read(cls.base_path + "/present"))
+            with open(cls.base_path + "/present") as f:
+                cls._present = CPUMask(f.read())
         return cls._present
 
     @classmethod
     def possible(cls):
         if not cls._possible:
-            cls._possible = CPUMask(read(cls.base_path + "/possible"))
+            with open(cls.base_path + "/possible") as f:
+                cls._present = CPUMask(f.read())
         return cls._possible
 
     def __init__(self, initial=None):
@@ -110,6 +112,6 @@ class CPUMask:
 
 
 if __name__ == "__main__":
-    print(CPUMask("0013f03f").to_list_representation())
+    print(CPUMask("00000001,0013f03f").to_list_representation())
     print(CPUMaskParser.parse("1,3"))
     print(CPUMask.present().cpus)
