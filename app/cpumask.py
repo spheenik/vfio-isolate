@@ -98,6 +98,9 @@ class CPUMask:
         else:
             raise Exception("unable to initialize")
 
+    def __repr__(self):
+        return f"CPUMask {self.to_list_representation()}"
+
     def to_list_representation(self):
         nums = sorted(self.cpus)
         gaps = [[s, e] for s, e in zip(nums, nums[1:]) if s + 1 < e]

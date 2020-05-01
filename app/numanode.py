@@ -7,8 +7,8 @@ class NUMANode:
     def __repr__(self):
         return f"NumaNode {self.number} ({self.get_cpumask().to_list_representation()})"
 
-    def __path(self, suffix):
-        return f"/sys/devices/system/node/node{self.number}/{suffix}"
+    def __path(self, path):
+        return f"/sys/devices/system/node/node{self.number}/{path}"
 
     def get_cpumask(self):
         from app.cpumask import CPUMask

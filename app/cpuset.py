@@ -18,6 +18,9 @@ class CPUSet:
         else:
             raise Exception("cannot initialize CPUSet")
 
+    def __repr__(self):
+        return f"CPUSet {self.name()}"
+
     def __path(self, path: str = None):
         elements = [CPUSet.base_path]
         elements.extend(self.path)
@@ -55,19 +58,22 @@ class CPUSet:
             for pid in f:
                 yield int(pid.strip())
 
-    def add_pid(self, pid: int):
+    def add_pid(self, pid: int, verbose=True):
         try:
+            if verbose:
+                output_verbose(f"moving PID {pid} to CPUSet {self.name()}")
             with open(self.__path("tasks"), "w") as f:
                 f.write(str(pid))
             return True
         except OSError:
             p = psutil.Process(pid)
-            output_verbose(f"unable to move PID {pid} ({p.name() if p.is_running() else 'not running'}) to CPUSet {self.name()}")
+            output_debug(f"unable to move PID {pid} ({p.name() if p.is_running() else 'not running'}) to CPUSet {self.name()}")
             return False
 
     def add_all_from_cpuset(self, other):
+        output_verbose(f"moving all processes from CPUSet {other.name()} to CPUSet {self.name()}")
         for pid in other.pids():
-            self.add_pid(pid)
+            self.add_pid(pid, False)
 
 
 CPUSet.root = CPUSet()
@@ -75,7 +81,7 @@ CPUSet.root = CPUSet()
 
 if __name__ == "__main__":
     test_set = CPUSet("test")
-
     test_set.add_all_from_cpuset(CPUSet.root)
     CPUSet.root.add_all_from_cpuset(test_set)
+
 

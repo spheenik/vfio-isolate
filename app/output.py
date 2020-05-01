@@ -1,21 +1,18 @@
 import sys
-
-
-__verbose = True
-
-
-def set_verbose(verbose: bool):
-    global __verbose
-    __verbose = verbose
+from app import verbose_enabled, debug_enabled
 
 
 def output(*args, **kwargs):
     print(*args, **kwargs)
 
 
+def output_debug(*args, **kwargs):
+    if debug_enabled:
+        print(*args, **kwargs)
+
+
 def output_verbose(*args, **kwargs):
-    global __verbose
-    if __verbose:
+    if verbose_enabled:
         print(*args, **kwargs)
 
 
