@@ -1,8 +1,9 @@
+import os
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import NodeVisitor
 
 
-class _MaskVisitor(NodeVisitor):
+class _NodeSetVisitor(NodeVisitor):
 
     def visit_sentence(self, _, children):
         return children[0]
@@ -50,7 +51,7 @@ class _MaskVisitor(NodeVisitor):
         return children or node
 
 
-class CPUMaskParser:
+class NodeSetParser:
     grammar = Grammar(
             """
             sentence      = (mask_form / list_form)
@@ -67,42 +68,30 @@ class CPUMaskParser:
     @classmethod
     def parse(cls, string_representation):
         tree = cls.grammar.parse(string_representation.strip())
-        return _MaskVisitor().visit(tree)
+        return _NodeSetVisitor().visit(tree)
 
 
-class CPUMask:
-
-    base_path = "/sys/devices/system/cpu"
-    _present = None
-    _possible = None
-
-    @classmethod
-    def present(cls):
-        if not cls._present:
-            with open(cls.base_path + "/present") as f:
-                cls._present = CPUMask(f.read())
-        return cls._present
-
-    @classmethod
-    def possible(cls):
-        if not cls._possible:
-            with open(cls.base_path + "/possible") as f:
-                cls._present = CPUMask(f.read())
-        return cls._possible
+class NodeSet:
 
     def __init__(self, initial=None):
         if not initial:
-            self.cpus = set()
+            self.nodes = set()
         elif isinstance(initial, str):
-            self.cpus = CPUMaskParser.parse(initial)
+            self.nodes = NodeSetParser.parse(initial)
         else:
             raise Exception("unable to initialize")
 
     def __repr__(self):
-        return f"CPUMask {self.to_list_representation()}"
+        return f"NodeSet {self.to_list_form()}"
 
-    def to_list_representation(self):
-        nums = sorted(self.cpus)
+    def __iter__(self):
+        return iter(self.nodes)
+
+    def add(self, other):
+        self.nodes = self.nodes.union(other.nodes)
+
+    def to_list_form(self):
+        nums = sorted(self.nodes)
         gaps = [[s, e] for s, e in zip(nums, nums[1:]) if s + 1 < e]
         edges = iter(nums[:1] + sum(gaps, []) + nums[-1:])
         segments = []
@@ -114,7 +103,40 @@ class CPUMask:
         return ",".join(segments)
 
 
-if __name__ == "__main__":
-    print(CPUMask("00000001,0013f03f").to_list_representation())
-    print(CPUMaskParser.parse("1,3"))
-    print(CPUMask.present().cpus)
+class CPUNodeSet(NodeSet):
+
+    def __repr__(self):
+        return f"CPUNodeSet ({self.to_list_form()})"
+
+    @staticmethod
+    def __cpu_path(node, path=""):
+        return f"/sys/devices/system/cpu/cpu{node}{path}"
+
+    def is_valid(self):
+        for node in self:
+            if not os.path.exists(self.__cpu_path(node)):
+                return False
+        return True
+
+
+class NUMANodeSet(NodeSet):
+
+    def __repr__(self):
+        return f"NUMANodeSet ({self.to_list_form()})"
+
+    @staticmethod
+    def __node_path(node, path=""):
+        return f"/sys/devices/system/node/node{node}{path}"
+
+    def is_valid(self):
+        for node in self:
+            if not os.path.exists(self.__node_path(node)):
+                return False
+        return True
+
+    def get_cpu_nodeset(self):
+        cpus = CPUNodeSet()
+        for node in self:
+            with open(self.__node_path(node, "/cpulist")) as f:
+                cpus.add(NodeSet(f.read()))
+        return cpus

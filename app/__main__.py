@@ -1,42 +1,79 @@
-import inspect
-import sys
+import click
 import app
-import argparse
-from app.command import Command
+from app.nodeset import CPUNodeSet, NUMANodeSet
+from app.cpuset import CPUSet
 
-# create main parser
-app.main_parser = argparse.ArgumentParser(prog="vfio-isolate", add_help=False)
 
-# find available commands
-app.available_command_classes = {}
-for name, cls in inspect.getmembers(sys.modules["app.commands"]):
-    if inspect.isclass(cls) and Command in cls.__bases__:
-        app.available_command_classes[cls.command_name] = cls
+def cb_numa_nodeset(ctx, param, value):
+    if not value:
+        return None
+    if value[0] == 'N':
+        s = NUMANodeSet(value[1:])
+        if not s.is_valid():
+            raise click.BadParameter(f"NUMA nodeset {value} is not valid")
+        return s
+    else:
+        raise click.BadParameter('must start with N')
 
-# create parsers for them
-subparsers = app.main_parser.add_subparsers(dest='command')
-for command_class in app.available_command_classes.values():
-    command_class.create_parser(subparsers)
 
-# scan command line and generate arguments
-commands_to_run = []
-argv = sys.argv[1:]
-while argv:
-    options, argv = app.main_parser.parse_known_args(argv)
-    if not options.command:
-        break
-    command_class = app.available_command_classes[options.command]
-    command_instance = command_class()
-    for option in options.__dict__:
-        if option == "command":
-            continue
-        setattr(command_instance, option, getattr(options, option))
-    commands_to_run.append(command_instance)
+def cb_cpu_nodeset(ctx, param, value):
+    if not value:
+        return None
+    if value[0] == 'N':
+        return cb_numa_nodeset(ctx, param, value).get_cpu_nodeset()
+    elif value[0] == 'C':
+        if not value:
+            return None
+        s = CPUNodeSet(value[1:])
+        if not s.is_valid():
+            raise click.BadParameter(f"CPU nodeset {value} is not valid")
+        return s
+    else:
+        raise click.BadParameter('must start with C or N')
 
-# run help if there was no command
-if not commands_to_run:
-    commands_to_run.append(app.command.HelpCommand())
 
-# do it
-for command in commands_to_run:
-    command.execute()
+@click.group(chain=True)
+@click.option('-v', '--verbose', help="enable verbose output", is_flag=True)
+@click.option('-d', '--debug', help="enable debug output", is_flag=True)
+def cli(verbose, debug):
+    app.verbose_enabled = verbose
+    app.debug_enabled = debug
+
+
+@cli.command('drop-caches')
+def drop_caches():
+    """drop caches"""
+    with open("/proc/sys/vm/drop_caches", "w") as f:
+        f.write("3")
+    with open("/proc/sys/vm/compact_memory", "w") as f:
+        f.write("1")
+
+
+@cli.command('cpuset-create')
+@click.argument("cpuset-name", metavar="<cpuset-name>")
+@click.option("--cpus", metavar="<cpunodeset|numanodeset>", help="Set the CPU nodes used by the cpuset", callback=cb_cpu_nodeset)
+@click.option("--mems", metavar="<numanodeset>", help="Set the NUMA memory nodes used by the cpuset", callback=cb_numa_nodeset)
+@click.option("--cpu-exclusive", "-ce", help="Set CPU exclusive", is_flag=True)
+@click.option("--mem-exclusive", "-me", help="Set MEM exclusive", is_flag=True)
+def cpuset_create(cpuset_name: str, cpus: CPUNodeSet, mems: NUMANodeSet, cpu_exclusive: bool, mem_exclusive: bool):
+    """create a cpuset"""
+    cpu_set = CPUSet(cpuset_name)
+    cpu_set.create(cpus, mems)
+    if cpus:
+        cpu_set.set_cpus(cpus)
+    if cpu_exclusive:
+        cpu_set.set_cpu_exclusive(True)
+    if mem_exclusive:
+        cpu_set.set_mem_exclusive(True)
+
+
+@cli.command('cpuset-delete')
+@click.argument("cpuset-name", metavar="<cpuset-name>")
+def cpuset_delete(cpuset_name):
+    """delete a cpuset"""
+    cpu_set = CPUSet(cpuset_name)
+    cpu_set.parent().add_all_from_cpuset(cpu_set)
+    cpu_set.remove()
+
+
+cli()

@@ -1,6 +1,6 @@
 import psutil
 import os
-from app.cpumask import CPUMask
+from app.nodeset import CPUNodeSet, NUMANodeSet
 from app.output import *
 
 
@@ -12,7 +12,7 @@ class CPUSet:
         if not name:
             self.path = []
         elif isinstance(name, str):
-            self.path = [name]
+            self.path = list(filter(None, name.split("/")))
         elif isinstance(name, list):
             self.path = [str(x) for x in name]
         else:
@@ -31,15 +31,41 @@ class CPUSet:
     def name(self):
         return "/" + "/".join(self.path)
 
-    def create(self):
+    def parent(self):
+        if not self.path:
+            raise Exception("no parent")
+        else:
+            return CPUSet(self.path[:-1])
+
+    def create(self, cpus: CPUNodeSet=None, mems: NUMANodeSet=None):
         os.mkdir(self.__path())
+        if cpus:
+            self.set_cpus(cpus)
+        else:
+            self.set_cpus(self.parent().get_cpus())
+        if mems:
+            self.set_mems(mems)
+        else:
+            self.set_mems(self.parent().get_mems())
 
     def remove(self):
         os.rmdir(self.__path())
 
-    def set_cpus(self, mask: CPUMask):
+    def get_cpus(self) -> CPUNodeSet:
+        with open(self.__path("cpuset.cpus"), "r") as f:
+            return CPUNodeSet(f.read())
+
+    def set_cpus(self, mask: CPUNodeSet):
         with open(self.__path("cpuset.cpus"), "w") as f:
-            f.write(mask.to_list_representation())
+            f.write(mask.to_list_form())
+
+    def get_mems(self) -> NUMANodeSet:
+        with open(self.__path("cpuset.mems"), "r") as f:
+            return NUMANodeSet(f.read())
+
+    def set_mems(self, mask: NUMANodeSet):
+        with open(self.__path("cpuset.mems"), "w") as f:
+            f.write(mask.to_list_form())
 
     def set_cpu_exclusive(self, value):
         with open(self.__path("cpuset.cpu_exclusive"), "w") as f:
@@ -58,30 +84,22 @@ class CPUSet:
             for pid in f:
                 yield int(pid.strip())
 
-    def add_pid(self, pid: int, verbose=True):
+    def add_pid(self, pid: int, silent=False):
         try:
-            if verbose:
-                output_verbose(f"moving PID {pid} to CPUSet {self.name()}")
+            if not silent:
+                print_verbose(f"moving PID {pid} to CPUSet {self.name()}")
             with open(self.__path("tasks"), "w") as f:
                 f.write(str(pid))
             return True
         except OSError:
             p = psutil.Process(pid)
-            output_debug(f"unable to move PID {pid} ({p.name() if p.is_running() else 'not running'}) to CPUSet {self.name()}")
+            print_debug(f"unable to move PID {pid} ({p.name() if p.is_running() else 'not running'}) to CPUSet {self.name()}")
             return False
 
     def add_all_from_cpuset(self, other):
-        output_verbose(f"moving all processes from CPUSet {other.name()} to CPUSet {self.name()}")
+        print_verbose(f"moving all processes from CPUSet {other.name()} to CPUSet {self.name()}")
         for pid in other.pids():
-            self.add_pid(pid, False)
+            self.add_pid(pid, True)
 
 
 CPUSet.root = CPUSet()
-
-
-if __name__ == "__main__":
-    test_set = CPUSet("test")
-    test_set.add_all_from_cpuset(CPUSet.root)
-    CPUSet.root.add_all_from_cpuset(test_set)
-
-

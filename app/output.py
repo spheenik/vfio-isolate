@@ -1,21 +1,20 @@
 import sys
-from app import verbose_enabled, debug_enabled
+import app
 
 
-def output(*args, **kwargs):
-    print(*args, **kwargs)
-
-
-def output_debug(*args, **kwargs):
-    if debug_enabled:
+def print_debug(*args, **kwargs):
+    if app.debug_enabled:
         print(*args, **kwargs)
 
 
-def output_verbose(*args, **kwargs):
-    if verbose_enabled:
+def print_verbose(*args, **kwargs):
+    if app.verbose_enabled:
         print(*args, **kwargs)
 
 
-def output_error(*args, **kwargs):
+def print_error(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
+
+
+
 
