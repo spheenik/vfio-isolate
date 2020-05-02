@@ -55,7 +55,8 @@ def drop_caches():
 @click.option("--mems", metavar="<numanodeset>", help="Set the NUMA memory nodes used by the cpuset", callback=cb_numa_nodeset)
 @click.option("--cpu-exclusive", "-ce", help="Set CPU exclusive", is_flag=True)
 @click.option("--mem-exclusive", "-me", help="Set MEM exclusive", is_flag=True)
-def cpuset_create(cpuset_name: str, cpus: CPUNodeSet, mems: NUMANodeSet, cpu_exclusive: bool, mem_exclusive: bool):
+@click.option("--mem-migrate", "-mm", help="Enable memory migration", is_flag=True)
+def cpuset_create(cpuset_name: str, cpus: CPUNodeSet, mems: NUMANodeSet, cpu_exclusive: bool, mem_exclusive: bool, mem_migrate: bool):
     """create a cpuset"""
     cpu_set = CPUSet(cpuset_name)
     cpu_set.create(cpus, mems)
@@ -65,6 +66,8 @@ def cpuset_create(cpuset_name: str, cpus: CPUNodeSet, mems: NUMANodeSet, cpu_exc
         cpu_set.set_cpu_exclusive(True)
     if mem_exclusive:
         cpu_set.set_mem_exclusive(True)
+    if mem_migrate:
+        cpu_set.set_mem_migrate(True)
 
 
 @cli.command('cpuset-delete')
@@ -74,6 +77,16 @@ def cpuset_delete(cpuset_name):
     cpu_set = CPUSet(cpuset_name)
     cpu_set.parent().add_all_from_cpuset(cpu_set)
     cpu_set.remove()
+
+
+@cli.command('move-tasks')
+@click.argument("cpuset-from", metavar="<cpuset-from>")
+@click.argument("cpuset-to", metavar="<cpuset-to>")
+def move_tasks(cpuset_from, cpuset_to):
+    """move tasks between cpusets"""
+    set_from = CPUSet(cpuset_from)
+    set_to = CPUSet(cpuset_to)
+    set_to.add_all_from_cpuset(set_from)
 
 
 cli()

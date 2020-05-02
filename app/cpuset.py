@@ -75,6 +75,10 @@ class CPUSet:
         with open(self.__path("cpuset.mem_exclusive"), "w") as f:
             f.write("1" if value else "0")
 
+    def set_mem_migrate(self, value):
+        with open(self.__path("cpuset.memory_migrate"), "w") as f:
+            f.write("1" if value else "0")
+
     def set_sched_load_balance(self, value):
         with open(self.__path("cpuset.sched_load_balance"), "w") as f:
             f.write("1" if value else "0")
@@ -92,8 +96,11 @@ class CPUSet:
                 f.write(str(pid))
             return True
         except OSError:
-            p = psutil.Process(pid)
-            print_debug(f"unable to move PID {pid} ({p.name() if p.is_running() else 'not running'}) to CPUSet {self.name()}")
+            try:
+                name = psutil.Process(pid).name()
+            except psutil.NoSuchProcess:
+                name = "not running"
+            print_debug(f"unable to move PID {pid} ({name}) to CPUSet {self.name()}")
             return False
 
     def add_all_from_cpuset(self, other):
