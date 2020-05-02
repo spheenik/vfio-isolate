@@ -45,6 +45,11 @@ def drop_caches():
     """drop caches"""
     with open("/proc/sys/vm/drop_caches", "w") as f:
         f.write("3")
+
+
+@cli.command('compact-memory')
+def compact_memory():
+    """compact memory"""
     with open("/proc/sys/vm/compact_memory", "w") as f:
         f.write("1")
 
