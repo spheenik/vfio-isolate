@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-DIR="$(dirname "$(readlink -f "$0")")"
-export PYTHONPATH=$DIR
-exec $DIR/venv/bin/python -m app $@

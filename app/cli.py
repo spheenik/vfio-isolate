@@ -89,4 +89,9 @@ def move_tasks(cpuset_from, cpuset_to):
     set_to.add_all_from_cpuset(set_from)
 
 
-cli()
+def run_cli():
+    cli()
+
+
+if __name__ == '__main__':
+    run_cli()

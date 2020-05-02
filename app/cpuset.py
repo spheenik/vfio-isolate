@@ -37,7 +37,7 @@ class CPUSet:
         else:
             return CPUSet(self.path[:-1])
 
-    def create(self, cpus: CPUNodeSet=None, mems: NUMANodeSet=None):
+    def create(self, cpus: CPUNodeSet = None, mems: NUMANodeSet = None):
         os.mkdir(self.__path())
         if cpus:
             self.set_cpus(cpus)
