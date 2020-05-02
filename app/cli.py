@@ -1,5 +1,4 @@
 import click
-import app
 from app.nodeset import CPUNodeSet, NUMANodeSet
 from app.cpuset import CPUSet
 
@@ -36,8 +35,9 @@ def cb_cpu_nodeset(ctx, param, value):
 @click.option('-v', '--verbose', help="enable verbose output", is_flag=True)
 @click.option('-d', '--debug', help="enable debug output", is_flag=True)
 def cli(verbose, debug):
-    app.verbose_enabled = verbose
-    app.debug_enabled = debug
+    from app import output
+    output.verbose_enabled = verbose
+    output.debug_enabled = debug
 
 
 @cli.command('drop-caches')

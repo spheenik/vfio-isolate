@@ -1,14 +1,16 @@
 import sys
-import app
+
+debug_enabled = False
+verbose_enabled = False
 
 
 def print_debug(*args, **kwargs):
-    if app.debug_enabled:
+    if debug_enabled:
         print(*args, **kwargs)
 
 
 def print_verbose(*args, **kwargs):
-    if app.verbose_enabled:
+    if verbose_enabled:
         print(*args, **kwargs)
 
 
