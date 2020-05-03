@@ -1,3 +1,4 @@
+#! /usr/bin/env python3
 from setuptools import setup, find_packages
 from os import path
 
@@ -9,7 +10,7 @@ with open(path.join(here, 'README.md'), encoding='utf-8') as f:
 
 setup(
     name='vfio-isolate',
-    version='0.1',
+    version='0.1.3',
     description='Commandline tool to facilitate CPU core isolation',
     long_description=long_description,
     long_description_content_type='text/markdown',
@@ -20,7 +21,7 @@ setup(
         'Development Status :: 3 - Alpha',
         'Intended Audience :: System Administrators',
         'Topic :: System :: Systems Administration',
-        'Operating System :: POSIX :: Linux'
+        'Operating System :: POSIX :: Linux',
         'License :: OSI Approved :: MIT License',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
