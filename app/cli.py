@@ -1,6 +1,8 @@
 import click
+
+from app.action import *
 from app.nodeset import CPUNodeSet, NUMANodeSet
-from app.cpuset import CPUSet
+from app.serialize import *
 
 
 def cb_numa_nodeset(ctx, param, value):
@@ -41,17 +43,15 @@ def cli(verbose, debug):
 
 
 @cli.command('drop-caches')
-def drop_caches():
+def drop_caches(**args):
     """drop caches"""
-    with open("/proc/sys/vm/drop_caches", "w") as f:
-        f.write("3")
+    action_drop_caches(unserialize(ParamDropCaches, args))
 
 
 @cli.command('compact-memory')
-def compact_memory():
+def compact_memory(**args):
     """compact memory"""
-    with open("/proc/sys/vm/compact_memory", "w") as f:
-        f.write("1")
+    action_compact_memory(unserialize(ParamCompactMemory, args))
 
 
 @cli.command('cpuset-create')
@@ -61,37 +61,24 @@ def compact_memory():
 @click.option("--cpu-exclusive", "-ce", help="Set CPU exclusive", is_flag=True)
 @click.option("--mem-exclusive", "-me", help="Set MEM exclusive", is_flag=True)
 @click.option("--mem-migrate", "-mm", help="Enable memory migration", is_flag=True)
-def cpuset_create(cpuset_name: str, cpus: CPUNodeSet, mems: NUMANodeSet, cpu_exclusive: bool, mem_exclusive: bool, mem_migrate: bool):
+def cpuset_create(**args):
     """create a cpuset"""
-    cpu_set = CPUSet(cpuset_name)
-    cpu_set.create(cpus, mems)
-    if cpus:
-        cpu_set.set_cpus(cpus)
-    if cpu_exclusive:
-        cpu_set.set_cpu_exclusive(True)
-    if mem_exclusive:
-        cpu_set.set_mem_exclusive(True)
-    if mem_migrate:
-        cpu_set.set_mem_migrate(True)
+    action_cpuset_create(unserialize(ParamCPUSetCreate, args))
 
 
 @cli.command('cpuset-delete')
 @click.argument("cpuset-name", metavar="<cpuset-name>")
-def cpuset_delete(cpuset_name):
+def cpuset_delete(**args):
     """delete a cpuset"""
-    cpu_set = CPUSet(cpuset_name)
-    cpu_set.parent().add_all_from_cpuset(cpu_set)
-    cpu_set.remove()
+    action_cpuset_delete(unserialize(ParamCPUSetDelete, args))
 
 
 @cli.command('move-tasks')
 @click.argument("cpuset-from", metavar="<cpuset-from>")
 @click.argument("cpuset-to", metavar="<cpuset-to>")
-def move_tasks(cpuset_from, cpuset_to):
+def move_tasks(**args):
     """move tasks between cpusets"""
-    set_from = CPUSet(cpuset_from)
-    set_to = CPUSet(cpuset_to)
-    set_to.add_all_from_cpuset(set_from)
+    action_move_tasks(unserialize(ParamMoveTasks, args))
 
 
 def run_cli():
