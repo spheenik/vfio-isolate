@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 
 from app.cpuset import CPUNodeSet, NUMANodeSet, CPUSet
-from .action import Action
+from .action import Action, Execution
+from .cpuset_delete import CPUSetDelete
 
 
 class CPUSetCreate(Action):
@@ -26,3 +27,7 @@ class CPUSetCreate(Action):
             cpu_set.set_mem_exclusive(True)
         if p.mem_migrate:
             cpu_set.set_mem_migrate(True)
+
+    @classmethod
+    def record_undo(cls, p) -> Execution:
+        return Execution(CPUSetDelete, CPUSetDelete.Param(cpuset_name=p.cpuset_name))

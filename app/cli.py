@@ -1,10 +1,10 @@
 import click
-from dataclasses import dataclass
+import pickle
 
+from dataclasses import is_dataclass
 from app.action import *
 from app.nodeset import CPUNodeSet, NUMANodeSet
 from app.serialize import *
-
 
 def cb_numa_nodeset(ctx, param, value):
     if not value:
@@ -37,10 +37,13 @@ def cb_cpu_nodeset(ctx, param, value):
 @click.group(chain=True)
 @click.option('-v', '--verbose', help="enable verbose output", is_flag=True)
 @click.option('-d', '--debug', help="enable debug output", is_flag=True)
-def cli(verbose, debug):
+@click.option('-u', '--undo-file', metavar="<undo-file>", help="Create a file that describes the operations needed to undo")
+@click.pass_obj
+def cli(executor, verbose, debug, undo_file):
     from app import output
     output.verbose_enabled = verbose
     output.debug_enabled = debug
+    executor.undo_file = undo_file
 
 
 @cli.command('drop-caches')
@@ -87,23 +90,39 @@ def move_tasks(executor, **args):
     executor.add(MoveTasks, args)
 
 
-def run_cli():
+@cli.command('restore')
+@click.argument("undo-file", metavar="<undo-file>")
+@click.pass_obj
+def restore(executor, undo_file):
+    """restore a previous state using an undo file"""
+    with open(undo_file, "rb") as f:
+        executions = pickle.load(f)
+    for e in executions:
+        executor.add(e.action, e.params)
 
-    @dataclass
-    class Execution:
-        action: type
-        params: object
+
+def run_cli():
 
     class Executor:
         def __init__(self):
             self.executions = []
+            self.undo = []
+            self.undo_file = None
 
-        def add(self, action_class, parameter_map):
-            self.executions.append(Execution(action=action_class, params=unserialize(action_class.Param, parameter_map)))
+        def add(self, action_class, params):
+            if not is_dataclass(params):
+                params = unserialize(action_class.Param, params)
+            self.executions.append(Execution(action=action_class, params=params))
 
         def run(self):
             for e in self.executions:
+                undo = e.action.record_undo(e.params)
+                if undo:
+                    self.undo.append(undo)
                 e.action.execute(e.params)
+            if self.undo_file:
+                with open(self.undo_file, "wb") as f:
+                    pickle.dump(self.undo[::-1], f)
 
     executor = Executor()
     cli(standalone_mode=False, obj=executor)
