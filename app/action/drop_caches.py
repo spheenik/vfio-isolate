@@ -1,13 +1,14 @@
 from dataclasses import dataclass
 
-
-@dataclass
-class Param:
-    pass
+from .action import Action
 
 
-def execute(p: Param):
-    with open("/proc/sys/vm/drop_caches", "w") as f:
-        f.write("3")
+class DropCaches(Action):
+    @dataclass
+    class Param:
+        pass
 
-
+    @classmethod
+    def execute(cls, p: Param):
+        with open("/proc/sys/vm/drop_caches", "w") as f:
+            f.write("3")

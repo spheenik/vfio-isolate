@@ -45,13 +45,13 @@ def cli(verbose, debug):
 @cli.command('drop-caches')
 def drop_caches(**args):
     """drop caches"""
-    action_drop_caches(unserialize(ParamDropCaches, args))
+    DropCaches.execute(unserialize(DropCaches.Param, args))
 
 
 @cli.command('compact-memory')
 def compact_memory(**args):
     """compact memory"""
-    action_compact_memory(unserialize(ParamCompactMemory, args))
+    CompactMemory.execute(unserialize(CompactMemory.Param, args))
 
 
 @cli.command('cpuset-create')
@@ -63,14 +63,14 @@ def compact_memory(**args):
 @click.option("--mem-migrate", "-mm", help="Enable memory migration", is_flag=True)
 def cpuset_create(**args):
     """create a cpuset"""
-    action_cpuset_create(unserialize(ParamCPUSetCreate, args))
+    CPUSetCreate.execute(unserialize(CPUSetCreate.Param, args))
 
 
 @cli.command('cpuset-delete')
 @click.argument("cpuset-name", metavar="<cpuset-name>")
 def cpuset_delete(**args):
     """delete a cpuset"""
-    action_cpuset_delete(unserialize(ParamCPUSetDelete, args))
+    CPUSetDelete.execute(unserialize(CPUSetDelete.Param, args))
 
 
 @cli.command('move-tasks')
@@ -78,7 +78,7 @@ def cpuset_delete(**args):
 @click.argument("cpuset-to", metavar="<cpuset-to>")
 def move_tasks(**args):
     """move tasks between cpusets"""
-    action_move_tasks(unserialize(ParamMoveTasks, args))
+    MoveTasks.execute(unserialize(MoveTasks.Param, args))
 
 
 def run_cli():
