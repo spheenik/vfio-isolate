@@ -1,4 +1,5 @@
 import click
+from dataclasses import dataclass
 
 from app.action import *
 from app.nodeset import CPUNodeSet, NUMANodeSet
@@ -43,15 +44,17 @@ def cli(verbose, debug):
 
 
 @cli.command('drop-caches')
-def drop_caches(**args):
+@click.pass_obj
+def drop_caches(executor, **args):
     """drop caches"""
-    DropCaches.execute(unserialize(DropCaches.Param, args))
+    executor.add(DropCaches, args)
 
 
 @cli.command('compact-memory')
-def compact_memory(**args):
+@click.pass_obj
+def compact_memory(executor, **args):
     """compact memory"""
-    CompactMemory.execute(unserialize(CompactMemory.Param, args))
+    executor.add(CompactMemory, args)
 
 
 @cli.command('cpuset-create')
@@ -61,28 +64,50 @@ def compact_memory(**args):
 @click.option("--cpu-exclusive", "-ce", help="Set CPU exclusive", is_flag=True)
 @click.option("--mem-exclusive", "-me", help="Set MEM exclusive", is_flag=True)
 @click.option("--mem-migrate", "-mm", help="Enable memory migration", is_flag=True)
-def cpuset_create(**args):
+@click.pass_obj
+def cpuset_create(executor, **args):
     """create a cpuset"""
-    CPUSetCreate.execute(unserialize(CPUSetCreate.Param, args))
+    executor.add(CPUSetCreate, args)
 
 
 @cli.command('cpuset-delete')
 @click.argument("cpuset-name", metavar="<cpuset-name>")
-def cpuset_delete(**args):
+@click.pass_obj
+def cpuset_delete(executor, **args):
     """delete a cpuset"""
-    CPUSetDelete.execute(unserialize(CPUSetDelete.Param, args))
+    executor.add(CPUSetDelete, args)
 
 
 @cli.command('move-tasks')
 @click.argument("cpuset-from", metavar="<cpuset-from>")
 @click.argument("cpuset-to", metavar="<cpuset-to>")
-def move_tasks(**args):
+@click.pass_obj
+def move_tasks(executor, **args):
     """move tasks between cpusets"""
-    MoveTasks.execute(unserialize(MoveTasks.Param, args))
+    executor.add(MoveTasks, args)
 
 
 def run_cli():
-    cli()
+
+    @dataclass
+    class Execution:
+        action: type
+        params: object
+
+    class Executor:
+        def __init__(self):
+            self.executions = []
+
+        def add(self, action_class, parameter_map):
+            self.executions.append(Execution(action=action_class, params=unserialize(action_class.Param, parameter_map)))
+
+        def run(self):
+            for e in self.executions:
+                e.action.execute(e.params)
+
+    executor = Executor()
+    cli(standalone_mode=False, obj=executor)
+    executor.run()
 
 
 if __name__ == '__main__':
