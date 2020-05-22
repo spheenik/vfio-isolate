@@ -67,17 +67,33 @@ class CPUSet:
         with open(self.__path("cpuset.mems"), "w") as f:
             f.write(mask.to_list_form())
 
+    def get_cpu_exclusive(self):
+        with open(self.__path("cpuset.cpu_exclusive"), "r") as f:
+            return f.read() != "0"
+
     def set_cpu_exclusive(self, value):
         with open(self.__path("cpuset.cpu_exclusive"), "w") as f:
             f.write("1" if value else "0")
+
+    def get_mem_exclusive(self):
+        with open(self.__path("cpuset.mem_exclusive"), "r") as f:
+            return f.read() != "0"
 
     def set_mem_exclusive(self, value):
         with open(self.__path("cpuset.mem_exclusive"), "w") as f:
             f.write("1" if value else "0")
 
+    def get_mem_migrate(self):
+        with open(self.__path("cpuset.memory_migrate"), "r") as f:
+            return f.read() != "0"
+
     def set_mem_migrate(self, value):
         with open(self.__path("cpuset.memory_migrate"), "w") as f:
             f.write("1" if value else "0")
+
+    def get_sched_load_balance(self):
+        with open(self.__path("cpuset.sched_load_balance"), "r") as f:
+            return f.read() != "0"
 
     def set_sched_load_balance(self, value):
         with open(self.__path("cpuset.sched_load_balance"), "w") as f:

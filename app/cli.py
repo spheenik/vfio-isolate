@@ -64,9 +64,10 @@ def compact_memory(executor, **args):
 @click.argument("cpuset-name", metavar="<cpuset-name>")
 @click.option("--cpus", metavar="<cpunodeset|numanodeset>", help="Set the CPU nodes used by the cpuset", callback=cb_cpu_nodeset)
 @click.option("--mems", metavar="<numanodeset>", help="Set the NUMA memory nodes used by the cpuset", callback=cb_numa_nodeset)
-@click.option("--cpu-exclusive", "-ce", help="Set CPU exclusive", is_flag=True)
-@click.option("--mem-exclusive", "-me", help="Set MEM exclusive", is_flag=True)
-@click.option("--mem-migrate", "-mm", help="Enable memory migration", is_flag=True)
+@click.option("--cpu-exclusive/--no-cpu-exclusive", "-ce/-nce", help="Set CPU exclusive", default=None)
+@click.option("--mem-exclusive/--no-mem-exclusive", "-me/-nme", help="Set MEM exclusive", default=None)
+@click.option("--mem-migrate/--no-mem-migrate", "-mm/-nmm", help="Enable memory migration", default=None)
+@click.option("--sched-load-balance/--no-sched-load-balance", "-lb/-nlb", help="Enable scheduler load balancing", default=None)
 @click.pass_obj
 def cpuset_create(executor, **args):
     """create a cpuset"""

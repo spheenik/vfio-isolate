@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from app.cpuset import CPUSet
-from .action import Action
+from .action import Action, Execution
 
 
 class CPUSetDelete(Action):
@@ -14,3 +14,17 @@ class CPUSetDelete(Action):
         cpu_set = CPUSet(p.cpuset_name)
         cpu_set.parent().add_all_from_cpuset(cpu_set)
         cpu_set.remove()
+
+    @classmethod
+    def record_undo(cls, p) -> Execution:
+        from .cpuset_create import CPUSetCreate
+        cpu_set = CPUSet(p.cpuset_name)
+        return Execution(CPUSetCreate, CPUSetCreate.Param(
+            cpuset_name=p.cpuset_name,
+            cpus=cpu_set.get_cpus(),
+            mems=cpu_set.get_mems(),
+            cpu_exclusive=cpu_set.get_cpu_exclusive(),
+            mem_exclusive=cpu_set.get_mem_exclusive(),
+            mem_migrate=cpu_set.get_mem_migrate(),
+            sched_load_balance=cpu_set.get_sched_load_balance()
+        ))
