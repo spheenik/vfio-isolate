@@ -1,4 +1,5 @@
 import os
+
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import NodeVisitor
 
@@ -53,17 +54,17 @@ class _NodeSetVisitor(NodeVisitor):
 
 class NodeSetParser:
     grammar = Grammar(
-            """
-            sentence      = (mask_form / list_form)
-            list_form     = list_entry (comma list_entry)* 
-            list_entry    = (range / number)
-            mask_form     = mask_entry (comma mask_entry)*
-            mask_entry    = ~"[0-9a-f]{8}"
-            range         = number minus number
-            number        = ~"(0|[1-9][0-9]*)"
-            comma         = ","
-            minus         = "-"
-            """)
+        """
+        sentence      = (mask_form / list_form)
+        list_form     = list_entry (comma list_entry)* 
+        list_entry    = (range / number)
+        mask_form     = mask_entry (comma mask_entry)*
+        mask_entry    = ~"[0-9a-f]{8}"
+        range         = number minus number
+        number        = ~"(0|[1-9][0-9]*)"
+        comma         = ","
+        minus         = "-"
+        """)
 
     @classmethod
     def parse(cls, string_representation):
@@ -76,19 +77,30 @@ class NodeSet:
     def __init__(self, initial=None):
         if not initial:
             self.nodes = set()
+        elif isinstance(initial, set):
+            self.nodes = initial
         elif isinstance(initial, str):
             self.nodes = NodeSetParser.parse(initial)
         else:
-            raise Exception("unable to initialize")
+            raise Exception("unable to initialize NodeSet")
 
     def __repr__(self):
-        return f"NodeSet {self.to_list_form()}"
+        return f"{self.__class__.__name__} {self.to_list_form()}"
 
     def __iter__(self):
         return iter(self.nodes)
 
-    def add(self, other):
-        self.nodes = self.nodes.union(other.nodes)
+    def possible(self):
+        raise Exception("must properly override")
+
+    def negation(self):
+        return self.__class__({cpu for cpu in self.possible() if cpu not in self.nodes})
+
+    def union(self, other):
+        return self.__class__(self.nodes.union(other.nodes))
+
+    def intersection(self, other):
+        return self.__class__(self.nodes.intersection(other.nodes))
 
     def to_list_form(self):
         nums = sorted(self.nodes)
@@ -105,12 +117,13 @@ class NodeSet:
 
 class CPUNodeSet(NodeSet):
 
-    def __repr__(self):
-        return f"CPUNodeSet ({self.to_list_form()})"
-
     @staticmethod
     def __cpu_path(node, path=""):
         return f"/sys/devices/system/cpu/cpu{node}{path}"
+
+    def possible(self):
+        from app.system import possible_cpus
+        return possible_cpus()
 
     def is_valid(self):
         for node in self:
@@ -120,9 +133,6 @@ class CPUNodeSet(NodeSet):
 
 
 class NUMANodeSet(NodeSet):
-
-    def __repr__(self):
-        return f"NUMANodeSet ({self.to_list_form()})"
 
     @staticmethod
     def __node_path(node, path=""):
@@ -134,9 +144,17 @@ class NUMANodeSet(NodeSet):
                 return False
         return True
 
+    def possible(self):
+        from app.system import possible_nodes
+        return possible_nodes()
+
     def get_cpu_nodeset(self):
         cpus = CPUNodeSet()
         for node in self:
             with open(self.__node_path(node, "/cpulist")) as f:
-                cpus.add(NodeSet(f.read()))
+                cpus = cpus.union(CPUNodeSet(f.read()))
         return cpus
+
+
+if __name__ == "__main__":
+    print(NUMANodeSet("0").negation().get_cpu_nodeset().negation())
