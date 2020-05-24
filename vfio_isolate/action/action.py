@@ -19,4 +19,6 @@ class Action:
 
     @classmethod
     def record_undo(cls, p) -> Generator[Execution, None, None]:
-        pass
+        return
+        yield
+
