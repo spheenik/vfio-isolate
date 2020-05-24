@@ -125,7 +125,7 @@ class CPUNodeSet(NodeSet):
         return f"/sys/devices/system/cpu/cpu{node}{path}"
 
     def possible(self):
-        from app.system import possible_cpus
+        from vfio_isolate.system import possible_cpus
         return possible_cpus()
 
     def is_valid(self):
@@ -148,7 +148,7 @@ class NUMANodeSet(NodeSet):
         return True
 
     def possible(self):
-        from app.system import possible_nodes
+        from vfio_isolate.system import possible_nodes
         return possible_nodes()
 
     def get_cpu_nodeset(self):

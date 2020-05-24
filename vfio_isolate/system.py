@@ -1,4 +1,4 @@
-from app.nodeset import CPUNodeSet, NUMANodeSet
+from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 
 _base_path = "/sys/devices/system"
 
@@ -8,6 +8,7 @@ def cache(func):
         if not wrapper.value:
             wrapper.value = func()
         return wrapper.value
+
     wrapper.value = None
     return wrapper
 

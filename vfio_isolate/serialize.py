@@ -1,6 +1,5 @@
 from dataclasses import fields, asdict as serialize, is_dataclass
 
-
 __all__ = ['serialize', 'unserialize']
 
 

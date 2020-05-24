@@ -1,9 +1,8 @@
 import os
 from typing import Generator
 
-from app.output import print_debug
-
-from app.nodeset import CPUNodeSet, NUMANodeSet
+from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
+from vfio_isolate.output import print_debug
 
 
 class IRQ:

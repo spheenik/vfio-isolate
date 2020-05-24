@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from enum import Enum, unique
 
-from app.cpuset import CPUNodeSet
-from app.irq import IRQ
+from vfio_isolate.cpuset import CPUNodeSet
+from vfio_isolate.irq import IRQ
 from .action import Action, Execution
 
 

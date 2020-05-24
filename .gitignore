@@ -5,4 +5,4 @@
 build
 dist
 *.egg-info
-app/test.py
+vfio_isolate/test.py

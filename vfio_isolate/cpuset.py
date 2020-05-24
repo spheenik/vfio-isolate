@@ -1,7 +1,9 @@
-import psutil
 import os
-from app.nodeset import CPUNodeSet, NUMANodeSet
-from app.output import *
+
+import psutil
+
+from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
+from vfio_isolate.output import *
 
 
 class CPUSet:

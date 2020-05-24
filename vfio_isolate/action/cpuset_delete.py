@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.cpuset import CPUSet
+from vfio_isolate.cpuset import CPUSet
 from .action import Action, Execution
 
 

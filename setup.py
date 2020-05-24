@@ -37,7 +37,7 @@ setup(
     python_requires='>=3.6, <4',
     entry_points={
         'console_scripts': [
-            'vfio-isolate=app:run_cli',
+            'vfio-isolate=vfio_isolate:run_cli',
         ],
     }
 )
