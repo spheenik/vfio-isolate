@@ -1,4 +1,5 @@
 import pickle
+import sys
 from dataclasses import is_dataclass
 
 import click
@@ -167,4 +168,5 @@ def run_cli():
 
 
 if __name__ == '__main__':
+    sys.argv[0] = "vfio-isolate"
     run_cli()
