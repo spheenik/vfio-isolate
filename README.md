@@ -16,6 +16,7 @@ Options:
 
 Commands:
   compact-memory  compact memory
+  cpu-governor    set the CPU governor for the given CPUs
   cpuset-create   create a cpuset
   cpuset-delete   delete a cpuset
   drop-caches     drop caches
@@ -131,6 +132,21 @@ It will also write an undo description in `/tmp/undo_irq` which can be used to r
 
 ```
  sudo vfio-isolate restore /tmp/undo_irq
+```
+
+#### setting CPU governor
+
+vfio-isolate contains basic support for setting the CPU frequency governor for selected CPUs:
+
+```
+ sudo vfio-isolate -u /tmp/undo_gov cpu-governor performance C2-5,8-11
+```
+
+will set the mentioned CPUs to performance mode.
+It will also write an undo description in `/tmp/undo_gov` which can be used to restore the previous state:
+
+```
+ sudo vfio-isolate restore /tmp/undo_gov
 ```
 
    

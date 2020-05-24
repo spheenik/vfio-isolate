@@ -10,7 +10,7 @@ with open(path.join(here, 'README.md'), encoding='utf-8') as f:
 
 setup(
     name='vfio-isolate',
-    version='0.2.2',
+    version='0.3.0',
     description='Commandline tool to facilitate CPU core isolation',
     long_description=long_description,
     long_description_content_type='text/markdown',
