@@ -1,10 +1,14 @@
+from enum import Enum
+
 import click
 import pickle
 
 from dataclasses import is_dataclass
 from app.action import *
+from app.irq import IRQS
 from app.nodeset import CPUNodeSet, NUMANodeSet
 from app.serialize import *
+
 
 def cb_numa_nodeset(ctx, param, value):
     if not value:
@@ -32,6 +36,23 @@ def cb_cpu_nodeset(ctx, param, value):
         return s
     else:
         raise click.BadParameter('must start with C or N')
+
+
+class EnumChoice(click.Choice):
+    def __init__(self, enum, case_sensitive=False, use_value=False):
+        self.enum = enum
+        self.use_value = use_value
+        choices = [str(e.value) if use_value else e.name for e in self.enum]
+        super().__init__(choices, case_sensitive)
+
+    def convert(self, value, param, ctx):
+        result = super().convert(value, param, ctx)
+        # Find the original case in the enum
+        if not self.case_sensitive and result not in self.choices:
+            result = next(c for c in self.choices if result.lower() == c.lower())
+        if self.use_value:
+            return next(e for e in self.enum if str(e.value) == result)
+        return self.enum[result]
 
 
 @click.group(chain=True)
@@ -91,6 +112,20 @@ def move_tasks(executor, **args):
     executor.add(MoveTasks, args)
 
 
+@cli.command('irq-affinity')
+@click.argument("operation", type=EnumChoice(IRQAffinityOperation))
+@click.argument("cpus", metavar="<cpunodeset|numanodeset>", callback=cb_cpu_nodeset)
+@click.pass_obj
+def irq_affinity(executor, **args):
+    """manipulate the IRQ affinity"""
+    for irq in IRQS.active():
+        executor.add(IRQAffinity, IRQAffinity.Param(
+            irq=irq,
+            operation=args["operation"],
+            cpus=args["cpus"]
+        ))
+
+
 @cli.command('restore')
 @click.argument("undo-file", metavar="<undo-file>")
 @click.pass_obj
@@ -117,8 +152,7 @@ def run_cli():
 
         def run(self):
             for e in self.executions:
-                undo = e.action.record_undo(e.params)
-                if undo:
+                for undo in e.action.record_undo(e.params):
                     self.undo.append(undo)
                 e.action.execute(e.params)
             if self.undo_file:

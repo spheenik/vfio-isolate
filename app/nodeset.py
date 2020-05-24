@@ -90,6 +90,9 @@ class NodeSet:
     def __iter__(self):
         return iter(self.nodes)
 
+    def __len__(self):
+        return len(self.nodes)
+
     def possible(self):
         raise Exception("must properly override")
 

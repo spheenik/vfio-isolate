@@ -33,6 +33,6 @@ class CPUSetCreate(Action):
             cpu_set.set_sched_load_balance(p.sched_load_balance)
 
     @classmethod
-    def record_undo(cls, p) -> Execution:
+    def record_undo(cls, p):
         from .cpuset_delete import CPUSetDelete
-        return Execution(CPUSetDelete, CPUSetDelete.Param(cpuset_name=p.cpuset_name))
+        yield Execution(CPUSetDelete, CPUSetDelete.Param(cpuset_name=p.cpuset_name))

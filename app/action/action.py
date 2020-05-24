@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Generator
 
 
 @dataclass
@@ -17,5 +18,5 @@ class Action:
         pass
 
     @classmethod
-    def record_undo(cls, p) -> Execution:
+    def record_undo(cls, p) -> Generator[Execution, None, None]:
         pass

@@ -17,5 +17,5 @@ class MoveTasks(Action):
         set_to.add_all_from_cpuset(set_from)
 
     @classmethod
-    def record_undo(cls, p) -> Execution:
-        return Execution(MoveTasks, MoveTasks.Param(cpuset_from=p.cpuset_to, cpuset_to=p.cpuset_from))
+    def record_undo(cls, p):
+        yield Execution(MoveTasks, MoveTasks.Param(cpuset_from=p.cpuset_to, cpuset_to=p.cpuset_from))

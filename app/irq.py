@@ -1,4 +1,7 @@
 import os
+from typing import Generator
+
+from app.output import print_debug
 
 from app.nodeset import CPUNodeSet, NUMANodeSet
 
@@ -22,9 +25,14 @@ class IRQ:
         with open(self.__path("smp_affinity_list"), "r") as f:
             return CPUNodeSet(f.read())
 
-    def set_affinity(self, mask: CPUNodeSet):
-        with open(self.__path("smp_affinity_list"), "w") as f:
-            f.write(mask.to_list_form())
+    def set_affinity(self, cpus: CPUNodeSet):
+        try:
+            with open(self.__path("smp_affinity_list"), "w") as f:
+                f.write(cpus.to_list_form())
+            return True
+        except OSError:
+            print_debug(f"unable to move set affinity of IRQ {self.number} to CPUSet {cpus}")
+            return False
 
     def get_node(self) -> NUMANodeSet:
         with open(self.__path("node"), "r") as f:
@@ -34,7 +42,7 @@ class IRQ:
 class IRQS:
 
     @classmethod
-    def active(cls):
+    def active(cls) -> Generator[IRQ, None, None]:
         for file in os.listdir(IRQ.base_path):
             if file.isnumeric():
                 yield IRQ(int(file))
