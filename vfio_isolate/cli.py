@@ -5,6 +5,7 @@ from dataclasses import is_dataclass
 import click
 
 from vfio_isolate.action import *
+from vfio_isolate.cpu import CPU
 from vfio_isolate.irq import IRQS
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 from vfio_isolate.serialize import *
@@ -127,6 +128,20 @@ def irq_affinity(executor, **args):
             irq=irq,
             operation=args["operation"],
             cpus=args["cpus"]
+        ))
+
+
+@cli.command('cpu-governor')
+@click.argument("governor")
+@click.argument("cpus", metavar="<cpunodeset|numanodeset>", callback=cb_cpu_nodeset)
+@click.pass_obj
+def cpu_governor(executor, **args):
+    """set the CPU governor for the given CPUs"""
+    for n in args["cpus"]:
+        cpu = CPU(n)
+        executor.add(CPUGovernor, CPUGovernor.Param(
+            cpu=cpu,
+            governor=args["governor"]
         ))
 
 
