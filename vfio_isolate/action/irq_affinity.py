@@ -21,26 +21,28 @@ class IRQAffinity(Action):
 
     @classmethod
     def execute(cls, p: Param):
-        if p.operation == IRQAffinityOperation.add:
-            p.irq.set_affinity(p.irq.get_affinity().union(p.cpus))
-        elif p.operation == IRQAffinityOperation.mask:
-            p.irq.set_affinity(p.irq.get_affinity().intersection(p.cpus.negation()))
+        if p.irq.exists():
+            if p.operation == IRQAffinityOperation.add:
+                p.irq.set_affinity(p.irq.get_affinity().union(p.cpus))
+            elif p.operation == IRQAffinityOperation.mask:
+                p.irq.set_affinity(p.irq.get_affinity().intersection(p.cpus.negation()))
 
     @classmethod
     def record_undo(cls, p: Param):
-        if p.operation == IRQAffinityOperation.add:
-            added = p.irq.get_affinity().negation().intersection(p.cpus)
-            if len(added):
-                yield Execution(IRQAffinity, IRQAffinity.Param(
-                    irq=p.irq,
-                    operation=IRQAffinityOperation.mask,
-                    cpus=added
-                ))
-        elif p.operation == IRQAffinityOperation.mask:
-            masked = p.irq.get_affinity().intersection(p.cpus)
-            if len(masked):
-                yield Execution(IRQAffinity, IRQAffinity.Param(
-                    irq=p.irq,
-                    operation=IRQAffinityOperation.add,
-                    cpus=masked
-                ))
+        if p.irq.exists():
+            if p.operation == IRQAffinityOperation.add:
+                added = p.irq.get_affinity().negation().intersection(p.cpus)
+                if len(added):
+                    yield Execution(IRQAffinity, IRQAffinity.Param(
+                        irq=p.irq,
+                        operation=IRQAffinityOperation.mask,
+                        cpus=added
+                    ))
+            elif p.operation == IRQAffinityOperation.mask:
+                masked = p.irq.get_affinity().intersection(p.cpus)
+                if len(masked):
+                    yield Execution(IRQAffinity, IRQAffinity.Param(
+                        irq=p.irq,
+                        operation=IRQAffinityOperation.add,
+                        cpus=masked
+                    ))

@@ -20,6 +20,9 @@ class IRQ:
             elements.append(path)
         return "/".join(elements)
 
+    def exists(self):
+        return os.path.exists(self.__path("smp_affinity_list"))
+
     def get_affinity(self) -> CPUNodeSet:
         with open(self.__path("smp_affinity_list"), "r") as f:
             return CPUNodeSet(f.read())
