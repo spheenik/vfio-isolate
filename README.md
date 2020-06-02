@@ -58,7 +58,7 @@ the two cpusets (so cpu exclusivity cannot be used), and you have to use pinning
 in libvirt to pin the guest cpus like this:
 
 ```
-<vcpu placement='static' cpuset='0-11'>8</vcpu>
+<vcpu placement='static'>8</vcpu>
   <vcpupin vcpu="0" cpuset="2"/>
   <vcpupin vcpu="1" cpuset="8"/>
   <vcpupin vcpu="2" cpuset="3"/>
