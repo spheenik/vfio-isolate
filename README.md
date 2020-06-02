@@ -47,7 +47,7 @@ emulation work, while giving the remaining 4 cores to the VM.
 The command to use would be this:
 
 ```
- sudo vfio-isolate \ 
+ # vfio-isolate \ 
     cpuset-create --cpus C0-1,6-7 /host.slice \
     cpuset-create --cpus C0-11 -nlb /machine.slice \ 
     move-tasks / /host.slice
@@ -58,7 +58,7 @@ the two cpusets (so cpu exclusivity cannot be used), and you have to use pinning
 in libvirt to pin the guest cpus like this:
 
 ```
-<vcpu placement='static' cpuset='0-11'>8</vcpu>
+<vcpu placement='static'>8</vcpu>
   <vcpupin vcpu="0" cpuset="2"/>
   <vcpupin vcpu="1" cpuset="8"/>
   <vcpupin vcpu="2" cpuset="3"/>
@@ -75,7 +75,7 @@ in libvirt to pin the guest cpus like this:
 To manually undo the previous command:
 
 ```
- sudo vfio-isolate \ 
+ # vfio-isolate \ 
     cpuset-delete /host.slice \
     cpuset-delete /machine.slice 
 ```
@@ -90,7 +90,7 @@ If you have a system with more than one NUMA nodes, you might want to isolate ac
 For example, on an AMD Threadripper 1920X (12 core, 24 thread), which has 2 NUMA nodes, you could do the following
 
 ```
- sudo vfio-isolate \ 
+ # vfio-isolate \ 
     cpuset-create --cpus N0 --mems N0 -mm /host.slice \
     cpuset-create --cpus N1 --mems N1 -ce -me -mm -nlb /machine.slice \ 
     move-tasks / /host.slice
@@ -107,14 +107,14 @@ vfio-isolate is able to record all the changes that it did and storing a recipe 
 later.
 
 ```
- sudo vfio-isolate -u /tmp/undo_description \ 
+ # vfio-isolate -u /tmp/undo_description \ 
     cpuset-create --cpus C1-4 /test.slice
 ```
 
 This will create the `test.slice` cpuset, and also a file `/tmp/undo_description` that when executed like this
 
 ```
- sudo vfio-isolate restore /tmp/undo_description
+ # vfio-isolate restore /tmp/undo_description
 ```
 
 will remove `test.slice`. This works with all the subcommands that vfio-isolate supports. 
@@ -124,14 +124,14 @@ will remove `test.slice`. This works with all the subcommands that vfio-isolate 
 vfio-isolate contains basic support for disabling IRQ handler execution on certain cpus:
 
 ```
- sudo vfio-isolate -u /tmp/undo_irq irq-affinity mask C2-5,8-11
+ # vfio-isolate -u /tmp/undo_irq irq-affinity mask C2-5,8-11
 ```
 
 will prevent IRQ execution on the mentioned cpuset.
 It will also write an undo description in `/tmp/undo_irq` which can be used to restore the previous state:
 
 ```
- sudo vfio-isolate restore /tmp/undo_irq
+ # vfio-isolate restore /tmp/undo_irq
 ```
 
 #### setting CPU governor
@@ -139,14 +139,14 @@ It will also write an undo description in `/tmp/undo_irq` which can be used to r
 vfio-isolate contains basic support for setting the CPU frequency governor for selected CPUs:
 
 ```
- sudo vfio-isolate -u /tmp/undo_gov cpu-governor performance C2-5,8-11
+ # vfio-isolate -u /tmp/undo_gov cpu-governor performance C2-5,8-11
 ```
 
 will set the mentioned CPUs to performance mode.
 It will also write an undo description in `/tmp/undo_gov` which can be used to restore the previous state:
 
 ```
- sudo vfio-isolate restore /tmp/undo_gov
+ # vfio-isolate restore /tmp/undo_gov
 ```
 
    
