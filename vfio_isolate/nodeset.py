@@ -3,6 +3,17 @@ import os
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import NodeVisitor
 
+_base_path = "/sys/devices/system"
+
+def cache(func):
+    def wrapper():
+        if not wrapper.value:
+            wrapper.value = func()
+        return wrapper.value
+
+    wrapper.value = None
+    return wrapper
+
 
 class _NodeSetVisitor(NodeVisitor):
 
@@ -93,11 +104,16 @@ class NodeSet:
     def __len__(self):
         return len(self.nodes)
 
-    def possible(self):
-        raise Exception("must properly override")
+    def __bool__(self):
+        return len(self.nodes) != 0
+
+    def __eq__(self, other):
+        if isinstance(other, NodeSet):
+            return self.nodes == other.nodes
+        return False
 
     def negation(self):
-        return self.__class__({cpu for cpu in self.possible() if cpu not in self.nodes})
+        return self.__class__({cpu for cpu in CPUNodeSet.possible_cpus() if cpu not in self.nodes})
 
     def union(self, other):
         return self.__class__(self.nodes.union(other.nodes))
@@ -124,9 +140,17 @@ class CPUNodeSet(NodeSet):
     def __cpu_path(node, path=""):
         return f"/sys/devices/system/cpu/cpu{node}{path}"
 
-    def possible(self):
-        from vfio_isolate.system import possible_cpus
-        return possible_cpus()
+    @staticmethod
+    @cache
+    def present_cpus():
+        with open(f"{_base_path}/cpu/present") as f:
+            return CPUNodeSet(f.read())
+
+    @staticmethod
+    @cache
+    def possible_cpus():
+        with open(f"{_base_path}/cpu/possible") as f:
+            return CPUNodeSet(f.read())
 
     def is_valid(self):
         for node in self:
@@ -141,15 +165,23 @@ class NUMANodeSet(NodeSet):
     def __node_path(node, path=""):
         return f"/sys/devices/system/node/node{node}{path}"
 
+    @staticmethod
+    @cache
+    def online_nodes():
+        with open(f"{_base_path}/node/online") as f:
+            return NUMANodeSet(f.read())
+
+    @staticmethod
+    @cache
+    def possible_nodes():
+        with open(f"{_base_path}/node/possible") as f:
+            return NUMANodeSet(f.read())
+
     def is_valid(self):
         for node in self:
             if not os.path.exists(self.__node_path(node)):
                 return False
         return True
-
-    def possible(self):
-        from vfio_isolate.system import possible_nodes
-        return possible_nodes()
 
     def get_cpu_nodeset(self):
         cpus = CPUNodeSet()
