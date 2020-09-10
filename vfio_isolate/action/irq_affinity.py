@@ -25,14 +25,20 @@ class IRQAffinity(Action):
             if p.operation == IRQAffinityOperation.add:
                 p.irq.set_affinity(p.irq.get_affinity().union(p.cpus))
             elif p.operation == IRQAffinityOperation.mask:
-                p.irq.set_affinity(p.irq.get_affinity().intersection(p.cpus.negation()))
+                remaining = p.irq.get_affinity().intersection(p.cpus.negation())
+                if not remaining:
+                    # empty: set all but the masked ones
+                    p.irq.set_affinity(p.cpus.negation())
+                else:
+                    # not empty: set
+                    p.irq.set_affinity(remaining)
 
     @classmethod
     def record_undo(cls, p: Param):
         if p.irq.exists():
             if p.operation == IRQAffinityOperation.add:
                 added = p.irq.get_affinity().negation().intersection(p.cpus)
-                if len(added):
+                if added:
                     yield Execution(IRQAffinity, IRQAffinity.Param(
                         irq=p.irq,
                         operation=IRQAffinityOperation.mask,
@@ -40,9 +46,16 @@ class IRQAffinity(Action):
                     ))
             elif p.operation == IRQAffinityOperation.mask:
                 masked = p.irq.get_affinity().intersection(p.cpus)
-                if len(masked):
+                if masked:
                     yield Execution(IRQAffinity, IRQAffinity.Param(
                         irq=p.irq,
                         operation=IRQAffinityOperation.add,
                         cpus=masked
                     ))
+                    if masked == p.irq.get_affinity():
+                        # would mask all, remove all but the masked ones
+                        yield Execution(IRQAffinity, IRQAffinity.Param(
+                            irq=p.irq,
+                            operation=IRQAffinityOperation.mask,
+                            cpus=p.cpus.negation().intersection(masked.negation())
+                        ))
