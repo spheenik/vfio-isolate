@@ -65,8 +65,8 @@ in libvirt to pin the guest cpus like this:
   <vcpupin vcpu="3" cpuset="9"/>
   <vcpupin vcpu="4" cpuset="4"/>
   <vcpupin vcpu="5" cpuset="10"/>
-  <vcpupin vcpu="4" cpuset="5"/>
-  <vcpupin vcpu="5" cpuset="11"/>
+  <vcpupin vcpu="6" cpuset="5"/>
+  <vcpupin vcpu="7" cpuset="11"/>
   <emulatorpin cpuset="0-1,6-7"/>
   <iothreadpin iothread="1" cpuset="0-1,6-7"/>
 </cputune>
