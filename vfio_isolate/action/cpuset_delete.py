@@ -18,8 +18,14 @@ class CPUSetDelete(Action):
     @classmethod
     def record_undo(cls, p):
         from .cpuset_create import CPUSetCreate
-        cpu_set = CPUSet(p.cpuset_name)
+        from .cpuset_modify import CPUSetModify
+
         yield Execution(CPUSetCreate, CPUSetCreate.Param(
+            cpuset_name=p.cpuset_name
+        ))
+
+        cpu_set = CPUSet(p.cpuset_name)
+        yield Execution(CPUSetModify, CPUSetModify.Param(
             cpuset_name=p.cpuset_name,
             cpus=cpu_set.get_cpus(),
             mems=cpu_set.get_mems(),

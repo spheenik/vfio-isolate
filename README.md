@@ -19,6 +19,7 @@ Commands:
   cpu-governor    set the CPU governor for the given CPUs
   cpuset-create   create a cpuset
   cpuset-delete   delete a cpuset
+  cpuset-modify   modify a cpuset
   drop-caches     drop caches
   irq-affinity    manipulate the IRQ affinity
   move-tasks      move tasks between cpusets
@@ -27,8 +28,20 @@ Commands:
 
 #### Usage
 
-To "partion" your CPU between the host and your VM, a mechanism of the Linx kernel, named "cpusets" is used.
-Cpusets define the subset of cores are allowed to be scheduled on, but also have some other properties:
+To "partion" your CPU between the host and your VM, a mechanism of the Linx kernel, named "cgroups" is used.
+There exist 2 versions of cgroup, v1 and v2. Some options are only available for cgroups v1.
+
+To find out what version your system is using use the following command
+
+```
+mount | grep cgroup
+```
+
+it will show type cgroup for v1, and cgroup2 vor v2.
+
+CPU sets are part of cgroups, and define the subset of cores processes in a cgroup are allowed to be scheduled on.
+
+For cgroups v1, they also have some other properties:
 
 | Feature | Description |
 | --- | --- |
@@ -39,7 +52,69 @@ Cpusets define the subset of cores are allowed to be scheduled on, but also have
 
 For more information, see the kernel documentation at https://www.kernel.org/doc/Documentation/cgroup-v1/cpusets.txt
 
-#### Non NUMA example
+#### Non NUMA example (cgroups v2)
+
+In this example, an AMD 5950x is partitioned between host and VM. 
+The example further assumes that you are using
+systemd, which has created the cgroups system.slice and user.slice already.
+
+The VM is configured so that it exclusively uses the 8 cores of the second die.
+The last core of the first die is used for emulation and IO work, and the first seven are for the host.
+
+The command to use would be this:
+
+```
+ sudo vfio-isolate \ 
+    cpuset-modify --cpus C0-6,16-22 /system.slice \
+    cpuset-modify --cpus C0-6,16-22 /user.slice
+```
+
+This will instruct the two existing cgroups that systemd created to only use the first 6 cores.
+To pin the VM cores, use libvirt:
+
+```
+  <vcpu placement='static'>16</vcpu>
+  <iothreads>1</iothreads>
+  <cputune>
+    <vcpupin vcpu='0' cpuset='8'/>
+    <vcpupin vcpu='1' cpuset='24'/>
+    <vcpupin vcpu='2' cpuset='9'/>
+    <vcpupin vcpu='3' cpuset='25'/>
+    <vcpupin vcpu='4' cpuset='10'/>
+    <vcpupin vcpu='5' cpuset='26'/>
+    <vcpupin vcpu='6' cpuset='11'/>
+    <vcpupin vcpu='7' cpuset='27'/>
+    <vcpupin vcpu='8' cpuset='12'/>
+    <vcpupin vcpu='9' cpuset='28'/>
+    <vcpupin vcpu='10' cpuset='13'/>
+    <vcpupin vcpu='11' cpuset='29'/>
+    <vcpupin vcpu='12' cpuset='14'/>
+    <vcpupin vcpu='13' cpuset='30'/>
+    <vcpupin vcpu='14' cpuset='15'/>
+    <vcpupin vcpu='15' cpuset='31'/>
+    <emulatorpin cpuset='7,23'/>
+    <iothreadpin iothread='1' cpuset='7,23'/>
+    <vcpusched vcpus='0' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='1' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='2' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='3' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='4' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='5' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='6' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='7' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='8' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='9' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='10' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='11' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='12' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='13' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='14' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='15' scheduler='rr' priority='1'/>
+    <iothreadsched iothreads='1' scheduler='fifo' priority='98'/>
+  </cputune>
+```
+
+#### Non NUMA example (cgroups v1)
 
 In this example, we have a 6 core, 12 thread CPU from Intel, and we want to leave the first 2 cores for host, IO and
 emulation work, while giving the remaining 4 cores to the VM.
@@ -49,14 +124,13 @@ The command to use would be this:
 ```
  # vfio-isolate \ 
     cpuset-create --cpus C0-1,6-7 /host.slice \
-    cpuset-create --cpus C0-11 -nlb /machine.slice \ 
     move-tasks / /host.slice
 ```
 
-Notice that scheduler-load-balancing has been disabled on the machine.slice, and that there is some overlap between 
-the two cpusets (so cpu exclusivity cannot be used), and you have to use pinning
-in libvirt to pin the guest cpus like this:
+This will move all the processes from the root cgroup to your newly created host.slice, and assigns only the first two 
+physical cores for execution.
 
+To now make your VM use the now remaining idle cores, you can use libvirt:
 ```
 <vcpu placement='static'>8</vcpu>
   <vcpupin vcpu="0" cpuset="2"/>
@@ -75,16 +149,15 @@ in libvirt to pin the guest cpus like this:
 To manually undo the previous command:
 
 ```
- # vfio-isolate \ 
-    cpuset-delete /host.slice \
-    cpuset-delete /machine.slice 
+ sudo vfio-isolate \ 
+    cpuset-delete /host.slice
 ```
 
 Or you could use the undo feature built into vfio-isolate (see below).
 
 All processes in a cpuset will be moved to its parent cpuset upon deletion.
 
-#### NUMA example
+#### NUMA example (cgroups v1)
 
 If you have a system with more than one NUMA nodes, you might want to isolate according to the different nodes.
 For example, on an AMD Threadripper 1920X (12 core, 24 thread), which has 2 NUMA nodes, you could do the following
@@ -92,14 +165,12 @@ For example, on an AMD Threadripper 1920X (12 core, 24 thread), which has 2 NUMA
 ```
  # vfio-isolate \ 
     cpuset-create --cpus N0 --mems N0 -mm /host.slice \
-    cpuset-create --cpus N1 --mems N1 -ce -me -mm -nlb /machine.slice \ 
     move-tasks / /host.slice
 ```
 
 This will configure NUMA Node 0, in this case CPU 0-5,12-17 for the host, while configuring NUMA node 1 for 
-the VM (6-11,18-23). The `-ce/-me` parameters sets the cpus/memory of NUMA node 1 to be used exclusively by this cpuset, 
-while the `-mm` parameter enables memory migration for both sets, so that processes moving into either cpuset will 
-have their memory migrated to the right node. Further `-nlb` disables scheduler load balancing.
+the VM (6-11,18-23). The `-mm` parameter enables memory migration, so that processes moving into either the host or
+the VM cpuset will have their memory migrated to the right node.
 
 #### Undo
 
@@ -147,6 +218,47 @@ It will also write an undo description in `/tmp/undo_gov` which can be used to r
 
 ```
  # vfio-isolate restore /tmp/undo_gov
+```
+
+#### Fully featured example (/etc/libvirt/hooks/qemu):
+
+```
+#!/bin/bash
+
+HCPUS=0-6,16-22
+MCPUS=8-15,24-31
+
+UNDOFILE=/var/run/libvirt/qemu/vfio-isolate-undo.bin
+
+disable_isolation () {
+	vfio-isolate \
+		restore $UNDOFILE
+
+	taskset -pc 0-31 2  # kthreadd reset
+}
+
+enable_isolation () {
+	vfio-isolate \
+		-u $UNDOFILE \
+		drop-caches \
+		cpuset-modify --cpus C$HCPUS /system.slice \
+		cpuset-modify --cpus C$HCPUS /user.slice \
+		compact-memory \
+		irq-affinity mask C$MCPUS
+
+	taskset -pc $HCPUS 2  # kthreadd only on host cores
+}
+
+case "$2" in
+"prepare")
+	enable_isolation
+	;;
+"started")
+	;;
+"release")
+	disable_isolation
+	;;
+esac
 ```
 
    
