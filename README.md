@@ -1,6 +1,6 @@
 # vfio-isolate
 
-vfio-isolate is a command linux tool for Linux, which aims to facilitate CPU and
+vfio-isolate is a command line tool for Linux, which aims to facilitate CPU and
 memory isolation for running virtual machines with guaranteed latency.
 
 ```
@@ -69,7 +69,7 @@ The command to use would be this:
     cpuset-modify --cpus C0-6,16-22 /user.slice
 ```
 
-This will instruct the two existing cgroups that systemd created to only use the first 6 cores.
+This will instruct the two existing cgroups that systemd created to only use the first 7 cores.
 To pin the VM cores, use libvirt:
 
 ```
