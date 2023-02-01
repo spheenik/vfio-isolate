@@ -31,7 +31,7 @@ setup(
     install_requires=[
         'click~=7.1.2',
         'psutil~=5.7.0',
-        'parsimonious~=0.8.1',
+        'parsimonious~=0.9.0',
     ],
     packages=find_packages(),
     python_requires='>=3.6, <4',
