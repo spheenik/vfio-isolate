@@ -1,0 +1,7 @@
+?start       : list_form | mask_form
+list_form    : list_entry ("," list_entry)*
+list_entry   : range | NUMBER
+mask_form    : MASK_ENTRY ("," MASK_ENTRY)*
+range        : NUMBER "-" NUMBER
+NUMBER.0     : /0|[1-9][0-9]*/
+MASK_ENTRY.1 : /[0-9a-f]{8}/

@@ -1,0 +1,2 @@
+#!/bin/sh
+python -m lark.tools.standalone nodeset.lark > vfio_isolate/nodeset_parser.py

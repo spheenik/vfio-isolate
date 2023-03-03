@@ -10,7 +10,7 @@ with open(path.join(here, 'README.md'), encoding='utf-8') as f:
 
 setup(
     name='vfio-isolate',
-    version='0.4.0',
+    version='0.5.0',
     description='Commandline tool to facilitate CPU core isolation',
     long_description=long_description,
     long_description_content_type='text/markdown',
@@ -26,12 +26,17 @@ setup(
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
     ],
     keywords='vfio cpu isolation',
+    extras_require={"dev": [
+        "lark>=1.1.5"
+    ]},
     install_requires=[
-        'click~=7.1.2',
-        'psutil~=5.7.0',
-        'parsimonious~=0.8.1',
+        'click>=7.1.2',
+        'psutil>=5.7.0',
     ],
     packages=find_packages(),
     python_requires='>=3.6, <4',

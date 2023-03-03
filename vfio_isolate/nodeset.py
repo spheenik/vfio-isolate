@@ -1,7 +1,6 @@
 import os
 
-from parsimonious.grammar import Grammar
-from parsimonious.nodes import NodeVisitor
+from nodeset_parser import Transformer, Lark_StandAlone
 
 _base_path = "/sys/devices/system"
 
@@ -15,30 +14,28 @@ def cache(func):
     return wrapper
 
 
-class _NodeSetVisitor(NodeVisitor):
+class _LarkTransformer(Transformer):
 
-    def visit_sentence(self, _, children):
-        return children[0]
-
-    def visit_list_form(self, _, children):
-        value = children[0]
-        for item in children[1]:
-            value = value.union(item[1])
+    def list_form(self, children):
+        value = set()
+        for item in children:
+            value = value.union(item)
         return value
 
-    def visit_list_entry(self, _, children):
+    def list_entry(self, children):
         v = children[0]
-        if isinstance(v, int):
-            return {v}
+        if isinstance(v, str):
+            return {int(v)}
         elif isinstance(v, range):
             return set(v)
         else:
             raise Exception("don't know how to handle")
 
-    def visit_mask_form(self, _, children):
-        values = [children[0]]
-        for item in children[1]:
-            values.insert(0, item[1])
+
+    def mask_form(self, children):
+        values = []
+        for item in children:
+            values.insert(0, int(item.value, 16))
         bit = 0
         result = set()
         for value in values:
@@ -49,38 +46,15 @@ class _NodeSetVisitor(NodeVisitor):
                 bit = bit + 1
         return result
 
-    def visit_mask_entry(self, value, _):
-        return int(value.text, 16)
-
-    def visit_range(self, _, children):
-        low, _, high = children
-        return range(low, high + 1)
-
-    def visit_number(self, number, _):
-        return int(number.text)
-
-    def generic_visit(self, node, children):
-        return children or node
+    def range(self, children):
+        return range(int(children[0].value), int(children[1].value) + 1)
 
 
 class NodeSetParser:
-    grammar = Grammar(
-        """
-        sentence      = (mask_form / list_form)
-        list_form     = list_entry (comma list_entry)* 
-        list_entry    = (range / number)
-        mask_form     = mask_entry (comma mask_entry)*
-        mask_entry    = ~"[0-9a-f]{8}"
-        range         = number minus number
-        number        = ~"(0|[1-9][0-9]*)"
-        comma         = ","
-        minus         = "-"
-        """)
-
     @classmethod
     def parse(cls, string_representation):
-        tree = cls.grammar.parse(string_representation.strip())
-        return _NodeSetVisitor().visit(tree)
+        parser = Lark_StandAlone(transformer=_LarkTransformer())
+        return parser.parse(string_representation)
 
 
 class NodeSet:
@@ -189,7 +163,3 @@ class NUMANodeSet(NodeSet):
             with open(self.__node_path(node, "/cpulist")) as f:
                 cpus = cpus.union(CPUNodeSet(f.read()))
         return cpus
-
-
-if __name__ == "__main__":
-    print(NUMANodeSet("0").negation().get_cpu_nodeset().negation())
