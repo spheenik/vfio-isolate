@@ -1,6 +1,6 @@
 import os
 
-from nodeset_parser import Transformer, Lark_StandAlone
+from vfio_isolate.nodeset_parser import Transformer, Lark_StandAlone
 
 _base_path = "/sys/devices/system"
 
