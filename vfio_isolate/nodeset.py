@@ -65,6 +65,7 @@ class NodeSet:
         elif isinstance(initial, set):
             self.nodes = initial
         elif isinstance(initial, str):
+            initial = initial.rstrip()
             self.nodes = NodeSetParser.parse(initial)
         else:
             raise Exception("unable to initialize NodeSet")
