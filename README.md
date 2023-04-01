@@ -1,3 +1,5 @@
+#### Note: If you're looking for solutions on how to work with the new AMD 79x0X3D models, see [this issue](https://github.com/spheenik/vfio-isolate/issues/14).
+
 # vfio-isolate
 
 vfio-isolate is a command line tool for Linux, which aims to facilitate CPU and
