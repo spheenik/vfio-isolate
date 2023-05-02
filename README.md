@@ -243,6 +243,7 @@ enable_isolation () {
 	vfio-isolate \
 		-u $UNDOFILE \
 		drop-caches \
+		cpu-governor performance \
 		cpuset-modify --cpus C$HCPUS /system.slice \
 		cpuset-modify --cpus C$HCPUS /user.slice \
 		compact-memory \
