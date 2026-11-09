@@ -22,15 +22,15 @@ class CPU:
         return "/".join(elements)
 
     def get_governor(self) -> str:
-        with open(self.__path("cpufreq/scaling_governor"), "r") as f:
+        with open(self.__path("cpufreq/scaling_governor"), "r", encoding="utf-8") as f:
             return f.read().rstrip()
 
     def set_governor(self, governor: str):
-        with open(self.__path("cpufreq/scaling_governor"), "w") as f:
+        with open(self.__path("cpufreq/scaling_governor"), "w", encoding="utf-8") as f:
             f.write(governor)
 
     def get_available_governors(self):
-        with open(self.__path("cpufreq/scaling_available_governors"), "r") as f:
+        with open(self.__path("cpufreq/scaling_available_governors"), "r", encoding="utf-8") as f:
             return f.read().rstrip().split()
 
 
