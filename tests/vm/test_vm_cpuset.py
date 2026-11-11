@@ -217,7 +217,7 @@ def test_partition_invalid_reported(j, mkcg, capsys):
                    "/vmtest-p2"])
         err = capsys.readouterr().err
         assert rc == 1
-        assert "vfio-isolate: partition invalid:" in err
+        assert "vfio-isolate: cpuset-modify failed: partition invalid:" in err
         assert "Traceback" not in err
         assert rd("vmtest-p2", "cpuset.cpus.partition").startswith("isolated invalid")
         assert main(["restore", j]) == 0

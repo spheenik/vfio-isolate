@@ -3,6 +3,7 @@ from typing import Generator
 
 from vfio_isolate import fsroot
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
+from vfio_isolate import output
 from vfio_isolate.output import print_debug
 
 
@@ -34,8 +35,10 @@ class IRQ:
         try:
             with open(self.__path("smp_affinity_list"), "w") as f:
                 f.write(cpus.to_list_form())
+            output.failures.ok()
             return True
-        except OSError:
+        except OSError as e:
+            output.failures.irq(self.number, e)
             print_debug(f"unable to move set affinity of IRQ {self.number} to CPUSet {cpus}")
             return False
 

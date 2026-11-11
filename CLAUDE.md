@@ -24,7 +24,12 @@ dropped in 0.6; v1 users stay on 0.5.2.
   in the order they must be applied; restore reverses actions, never steps within one.
 - `cpuset.py` — cgroup v2 only; `cgroup_root()` is lazy/cached and raises
   `HostUnsupportedError` if the host has no v2 cpuset controller. Also `cpu.py`,
-  `irq.py`, `nodeset.py` (C/N nodeset types, e.g. `C0-3,8`, `N0`).
+  `irq.py`, `nodeset.py` (CLI forms `C0-3,8` list, `N0` NUMA, `M3c` hex mask parsed in
+  Python; `NodeSetSyntaxError`; bad/empty/nonexistent sets are click usage errors).
+- Errors: `privileges.require_root()` runs first in `Executor.run` and the `restore`
+  callback (`fake_host` patches it). Per-item IRQ/task `OSError`s go to
+  `output.failures` (errno table: expected -> one summary line, others warn), never stop
+  the run. `main()` formats stopping errors with a restore hint; Ctrl-C exits 130.
 - `systemd.py` — `systemctl` only via `_run()`: `unit_for_cgroup()` (mismatch raises
   `PreconditionError`), `show()` (space lists -> commas), `set_property()` (`--runtime`), `supports()`.
 - `fsroot.py` — `ROOT` + `path()`. All `/sys` and `/proc` access MUST go through

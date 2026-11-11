@@ -65,8 +65,7 @@ def test_cpuset_create_fails_after_undo_recorded(host, j, monkeypatch):
         raise OSError("boom")
     with monkeypatch.context() as m:
         m.setattr(CPUSet, "create", boom)
-        with pytest.raises(OSError):
-            main(["-u", j, "cpuset-create", "/a"])
+        assert main(["-u", j, "cpuset-create", "/a"]) == 1
     assert fsroot.ROOT == str(host.root)
     assert [n for n, _ in step_names(j)] == ["cpuset-delete"]
     assert main(["restore", j]) == 0
@@ -82,8 +81,7 @@ def test_cpuset_delete_fails_after_undo_recorded(host, j, monkeypatch):
         raise OSError("boom")
     with monkeypatch.context() as m:
         m.setattr(CPUSet, "remove", boom)
-        with pytest.raises(OSError):
-            main(["-u", j, "cpuset-delete", "/a"])
+        assert main(["-u", j, "cpuset-delete", "/a"]) == 1
     assert fsroot.ROOT == str(host.root)
     assert main(["restore", j]) == 0
     assert cpus_of(host, "a") == "2-3"
@@ -291,8 +289,7 @@ def test_record_undo_failure_appends_nothing(host, j, monkeypatch):
     def boom(params):
         raise OSError("boom")
     monkeypatch.setattr(CPUGovernor, "record_undo", staticmethod(boom))
-    with pytest.raises(OSError):
-        main(["-u", j, "cpu-governor", "schedutil", "C0"])
+    assert main(["-u", j, "cpu-governor", "schedutil", "C0"]) == 1
     assert open(j).read() == before
     assert gov(host, 0) == "performance"
 
@@ -303,6 +300,5 @@ def test_write_ahead_when_execute_raises(host, j, monkeypatch):
     def boom(self, *a, **k):
         raise OSError("boom")
     monkeypatch.setattr(CPU, "set_governor", boom)
-    with pytest.raises(OSError):
-        main(["-u", j, "cpu-governor", "performance", "C0"])
+    assert main(["-u", j, "cpu-governor", "performance", "C0"]) == 1
     assert [n for n, _ in step_names(j)] == ["cpu-governor"]

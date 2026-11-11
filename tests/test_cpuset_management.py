@@ -226,7 +226,7 @@ def test_partition_invalid_and_restore(host, j, capsys, monkeypatch):
     invalid_after_isolated(monkeypatch)
     rc = main(["-u", j, "cpuset-modify", "--cpus", "C4-7", "--partition", "isolated", "/p"])
     assert rc == 1
-    assert "vfio-isolate: partition invalid: Invalid cpu list in cpuset.cpus.exclusive" \
+    assert "vfio-isolate: cpuset-modify failed: partition invalid: Invalid cpu list in cpuset.cpus.exclusive" \
         in capsys.readouterr().err
     assert rd(host, "p", "cpuset.cpus.partition") == "isolated"
     assert main(["restore", j]) == 0

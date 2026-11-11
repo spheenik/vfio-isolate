@@ -3,7 +3,7 @@ import re
 
 import psutil
 
-from vfio_isolate import fsroot
+from vfio_isolate import fsroot, output
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 from vfio_isolate.output import *
 
@@ -218,12 +218,14 @@ class CPUSet:
                 print_verbose(f"moving PID {pid} to CPUSet {self.name()}")
             with self.open("cgroup.procs", "w") as f:
                 f.write(str(pid))
+            output.failures.ok()
             return True
-        except OSError:
+        except OSError as e:
             try:
                 name = psutil.Process(pid).name()
             except psutil.NoSuchProcess:
                 name = "not running"
+            output.failures.task(pid, name, e)
             print_debug(f"unable to move PID {pid} ({name}) to CPUSet {self.name()}")
             return False
 

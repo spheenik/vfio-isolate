@@ -6,42 +6,67 @@ from dataclasses import dataclass, is_dataclass
 import click
 
 from vfio_isolate.action import *
-from vfio_isolate import cpuset, journal
+from vfio_isolate import cpuset, journal, output, privileges
+from vfio_isolate.privileges import NotRootError
 from vfio_isolate.systemd import SystemctlError
 from vfio_isolate.cpu import CPU
 from vfio_isolate.cpuset import HostUnsupportedError, PartitionInvalidError
 from vfio_isolate.irq import IRQS
 from vfio_isolate.journal import JournalError
-from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
+from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet, NodeSet, NodeSetSyntaxError
 from vfio_isolate.serialize import *
+
+
+def _parse_nodeset(cls, text, value):
+    try:
+        s = cls(text)
+    except NodeSetSyntaxError as e:
+        raise click.BadParameter(f"{value!r}: {e}")
+    if not s:
+        raise click.BadParameter(f"{value!r}: the set is empty")
+    return s
+
+
+def _check_exists(s, value, what):
+    missing = [n for n in sorted(s) if not CPUNodeSet({n}).is_valid()] if what == "CPUs" \
+        else [n for n in sorted(s) if not NUMANodeSet({n}).is_valid()]
+    if missing:
+        raise click.BadParameter(f"{value!r}: {what} {NodeSet(set(missing)).to_list_form()} do not exist")
 
 
 def cb_numa_nodeset(ctx, param, value):
     if not value:
         return None
-    if value[0] == 'N':
-        s = NUMANodeSet(value[1:])
-        if not s.is_valid():
-            raise click.BadParameter(f"NUMA nodeset {value} is not valid")
-        return s
-    else:
-        raise click.BadParameter('must start with N')
+    if value[0] != 'N':
+        raise click.BadParameter(f"{value!r}: must start with N")
+    s = _parse_nodeset(NUMANodeSet, value[1:], value)
+    _check_exists(s, value, "NUMA nodes")
+    return s
 
 
 def cb_cpu_nodeset(ctx, param, value):
     if not value:
         return None
     if value[0] == 'N':
-        return cb_numa_nodeset(ctx, param, value).get_cpu_nodeset()
-    elif value[0] == 'C':
-        if not value:
-            return None
-        s = CPUNodeSet(value[1:])
-        if not s.is_valid():
-            raise click.BadParameter(f"CPU nodeset {value} is not valid")
+        s = cb_numa_nodeset(ctx, param, value).get_cpu_nodeset()
+        if not s:
+            raise click.BadParameter(f"{value!r}: the NUMA nodes have no CPUs")
         return s
+    elif value[0] == 'C':
+        s = _parse_nodeset(CPUNodeSet, value[1:], value)
+    elif value[0] == 'M':
+        if len(value) == 1:
+            raise click.BadParameter(f"{value!r}: the set is empty")
+        try:
+            s = CPUNodeSet.from_mask(value[1:])
+        except NodeSetSyntaxError as e:
+            raise click.BadParameter(f"{value!r}: {e}")
+        if not s:
+            raise click.BadParameter(f"{value!r}: the set is empty")
     else:
-        raise click.BadParameter('must start with C or N')
+        raise click.BadParameter(f"{value!r}: must start with C, N or M")
+    _check_exists(s, value, "CPUs")
+    return s
 
 
 class EnumChoice(click.Choice):
@@ -138,12 +163,13 @@ def move_tasks(executor, **args):
 @click.pass_obj
 def irq_affinity(executor, **args):
     """manipulate the IRQ affinity"""
+    group = object()  # all IRQs of this command form one failure scope
     for irq in IRQS.active():
         executor.add(IRQAffinity, IRQAffinity.Param(
             irq=irq,
             operation=args["operation"],
             cpus=args["cpus"]
-        ))
+        ), group=group)
 
 
 @cli.command('cpu-governor')
@@ -152,6 +178,26 @@ def irq_affinity(executor, **args):
 @click.pass_obj
 def cpu_governor(executor, **args):
     """set the CPU governor for the given CPUs"""
+    governor = args["governor"]
+    available = {}
+    for n in sorted(args["cpus"]):
+        try:
+            available[n] = CPU(n).get_available_governors()
+        except OSError:
+            available[n] = None
+    no_cpufreq = [n for n, g in available.items() if g is None]
+    unsupported = [n for n, g in available.items() if g is not None and governor not in g]
+    if no_cpufreq or unsupported:
+        union = sorted({x for g in available.values() if g for x in g})
+        problems = []
+        if no_cpufreq:
+            problems.append(f"CPUs {CPUNodeSet(set(no_cpufreq)).to_list_form()} have no cpufreq")
+        if unsupported:
+            problems.append(f"CPUs {CPUNodeSet(set(unsupported)).to_list_form()} "
+                            f"do not support governor {governor!r}")
+        raise click.BadParameter(
+            "; ".join(problems) + f"; available governors: {' '.join(union) or '(none)'}",
+            param_hint="governor")
     for n in args["cpus"]:
         cpu = CPU(n)
         executor.add(CPUGovernor, CPUGovernor.Param(
@@ -167,6 +213,7 @@ def restore(executor, undo_file):
     """restore a previous state using an undo file"""
     if executor.undo_file:
         raise click.UsageError("-u/--undo-file cannot be combined with restore")
+    privileges.require_root()
     # read and decode now, so a bad file stops the whole chain before anything runs
     records = journal.read_journal(undo_file)
     st = os.stat(undo_file)
@@ -188,11 +235,19 @@ class Executor:
         self.executions = []  # Execution or RestoreBatch
         self.undo_file = None
         self.restore_ids = set()  # (st_dev, st_ino) of journals already queued for restore
+        self.restore_path = None  # undo file of the restore batch being replayed, if any
+        self.current = None   # name of the action being checked/recorded/executed, or "restore"
+        self.changed = False  # an action's execute (or a restore batch) has started
+        self.records = 0      # journal records appended this run
+        self.groups = {}      # id(Execution) -> group token of the command that queued it
 
-    def add(self, action_class, params):
+    def add(self, action_class, params, group=None):
+        """Queue an action. Executions sharing a group (one click command) share a failure scope."""
         if not is_dataclass(params):
             params = unserialize(action_class.Param, params)
-        self.executions.append(Execution(action=action_class, params=params))
+        e = Execution(action=action_class, params=params)
+        self.groups[id(e)] = group if group is not None else object()
+        self.executions.append(e)
 
     def add_restore(self, batch):
         self.executions.append(batch)
@@ -205,22 +260,51 @@ class Executor:
         return False
 
     def run(self) -> int:
+        privileges.require_root()
         # fail before touching anything (record_undo reads cgroup files too)
         if self._needs_cgroup():
             cpuset.cgroup_root()
         appender = journal.open_for_append(self.undo_file) if self.undo_file else None
         rc = 0
+        scope = None  # group token of the open failure scope, if any
+
+        def close_scope():
+            nonlocal scope, rc
+            if scope is not None:
+                scope = None
+                label = self._scope_label
+                if output.failures.end():
+                    print(f"vfio-isolate: {label[0]}: no {label[1]} could be {label[2]}", file=sys.stderr)
+                    rc = max(rc, 1)
+
         try:
             for e in self.executions:
+                group = None if isinstance(e, RestoreBatch) else self.groups.get(id(e))
+                if scope is not None and group is not scope:
+                    close_scope()
+                if (group is not None and scope is None
+                        and e.action in (IRQAffinity, MoveTasks)):
+                    scope = group
+                    self._scope_label = ((e.action.name, "IRQ", "changed") if e.action is IRQAffinity
+                                         else (e.action.name, "task", "moved"))
+                    output.failures.begin()
                 if isinstance(e, RestoreBatch):
+                    self.current = "restore"
+                    self.restore_path = e.path
+                    self.changed = True
                     rc = max(rc, self._restore(e))
+                    self.restore_path = None
                     continue
+                self.current = e.action.name
                 if e.action.can_execute(e.params) is False:
                     raise PreconditionError(f"{e.action.name}: precondition failed")
                 steps = list(e.action.record_undo(e.params))
                 if appender:
                     appender.append(steps)
+                    self.records += bool(steps)
+                self.changed = True
                 e.action.execute(e.params)
+            close_scope()
         finally:
             if appender:
                 appender.close()
@@ -257,7 +341,36 @@ class Executor:
         return 1
 
 
+def _hint(executor):
+    if executor.undo_file and executor.records:
+        return f'run "vfio-isolate restore {executor.undo_file}" to undo the changes made so far'
+    if not executor.undo_file and executor.changed:
+        return "changes made before the failure remain"
+    return None
+
+
+def _say(executor, message, *extra):
+    parts = [message, *extra]
+    hint = _hint(executor)
+    if hint:
+        parts.append(hint)
+    print("vfio-isolate: " + "; ".join(parts), file=sys.stderr)
+
+
+def _interrupted(executor):
+    if not executor.changed:
+        print("vfio-isolate: interrupted, nothing was changed", file=sys.stderr)
+    elif executor.current == "restore" and executor.restore_path:
+        print(f"vfio-isolate: interrupted during restore of {executor.restore_path}; "
+              f"it was left unchanged, run restore again", file=sys.stderr)
+    else:
+        _say(executor, f"interrupted during {executor.current}")
+    return 130
+
+
 def main(argv=None) -> int:
+    from vfio_isolate import output
+    output.failures.reset()
     executor = Executor()
     try:
         rv = cli.main(args=argv, prog_name="vfio-isolate", standalone_mode=False, obj=executor)
@@ -266,17 +379,37 @@ def main(argv=None) -> int:
         return executor.run()
     except click.exceptions.Exit as e:
         return e.exit_code
-    except click.exceptions.Abort:
-        return 1
+    except (click.exceptions.Abort, KeyboardInterrupt):
+        return _interrupted(executor)
     except click.ClickException as e:
         e.show()
         return e.exit_code
-    except PartitionInvalidError as e:
-        print(f"vfio-isolate: partition invalid: {e}", file=sys.stderr)
-        return 1
-    except (HostUnsupportedError, JournalError, PreconditionError, SystemctlError) as e:
+    except NotRootError as e:
         print(f"vfio-isolate: {e}", file=sys.stderr)
         return 1
+    except PartitionInvalidError as e:
+        what = f"{executor.current} failed: " if executor.current else ""
+        _say(executor, f"{what}partition invalid: {e}")
+        return 1
+    except (HostUnsupportedError, JournalError, PreconditionError, SystemctlError) as e:
+        what = f"{executor.current} failed: " if executor.current else ""
+        _say(executor, f"{what}{e}")
+        return 1
+    except OSError as e:
+        what = f"{executor.current} failed: " if executor.current else ""
+        detail = e.strerror or str(e)
+        if e.filename:
+            detail += f": {e.filename}"
+        _say(executor, what + detail)
+        return 1
+    except Exception as e:
+        if output.debug_enabled:
+            raise
+        what = f"{executor.current} failed: " if executor.current else ""
+        _say(executor, f"{what}{type(e).__name__}: {e}", "use -d for a traceback")
+        return 1
+    finally:
+        output.failures.report()
 
 
 def run_cli():

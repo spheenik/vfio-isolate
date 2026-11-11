@@ -345,6 +345,8 @@ def fake_host(tmp_path, monkeypatch):
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setattr(fsroot, "ROOT", str(root))
+    from vfio_isolate import privileges
+    monkeypatch.setattr(privileges, "require_root", lambda: None)
     # nodeset.py memoizes its sysfs reads in function attributes; clear them
     from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
     funcs = [CPUNodeSet.present_cpus, CPUNodeSet.possible_cpus,
