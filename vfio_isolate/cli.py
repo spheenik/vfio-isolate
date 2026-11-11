@@ -86,13 +86,37 @@ class EnumChoice(click.Choice):
         return self.enum[result]
 
 
+CPUS_HELP = ("C<list>: CPUs, e.g. C0-3,8. N<list>: all CPUs of the given NUMA nodes, e.g. N0. "
+             "M<mask>: hex CPU mask as in /proc/irq/*/smp_affinity, e.g. M3c or Mff,0000000f.")
+CPUS_DOC = "\b\nCPUS is one of:\n  " + "\n  ".join([
+    "C<list>  CPUs, e.g. C0-3,8",
+    "N<list>  all CPUs of the given NUMA nodes, e.g. N0",
+    "M<mask>  hex CPU mask as in /proc/irq/*/smp_affinity, e.g. M3c, Mff,0000000f",
+])
+MEMS_HELP = "N<list>: NUMA memory nodes, e.g. N0 or N0-1."
+
+
 @click.group(chain=True)
 @click.option('-v', '--verbose', help="enable verbose output", is_flag=True)
 @click.option('-d', '--debug', help="enable debug output", is_flag=True)
 @click.option('-u', '--undo-file', metavar="<undo-file>",
-              help="Create a file that describes the operations needed to undo")
+              help="Record the undo steps of each command in this file before the command runs "
+                   "(appended to if the file exists). Undo with: vfio-isolate restore <undo-file>")
 @click.pass_obj
 def cli(executor, verbose, debug, undo_file):
+    """Isolate CPUs and memory for VFIO VMs.
+
+    Commands can be chained; they run in the order given, and all arguments are
+    validated before anything runs. Every run with a command (including restore) needs root.
+
+    \b
+    Exit status:
+      0    success
+      1    failure, including a command that changed nothing because of
+           unexpected errors
+      2    usage error
+      130  interrupted
+    """
     from vfio_isolate import output
     output.verbose_enabled = verbose
     output.debug_enabled = debug
@@ -115,28 +139,38 @@ def compact_memory(executor, **args):
 
 @cli.command('cpuset-create')
 @click.argument("cpuset-name", metavar="<cpuset-name>")
-@click.option("--cpus", metavar="<cpunodeset|numanodeset>", help="Set the CPU nodes used by the cpuset",
+@click.option("--cpus", metavar="<cpus>", help="Set the CPUs used by the cpuset. " + CPUS_HELP,
               callback=cb_cpu_nodeset)
-@click.option("--mems", metavar="<numanodeset>", help="Set the NUMA memory nodes used by the cpuset",
+@click.option("--mems", metavar="<nodes>", help="Set the NUMA memory nodes used by the cpuset. " + MEMS_HELP,
               callback=cb_numa_nodeset)
 @click.pass_obj
 def cpuset_create(executor, **args):
-    """create a cpuset"""
+    """create a cpuset
+
+    The new cpuset inherits its parent's CPUs and memory nodes unless --cpus/--mems
+    are given. Refused for systemd units and /.
+    """
     executor.add(CPUSetCreate, args)
     executor.add(CPUSetModify, args)
 
 
 @cli.command('cpuset-modify')
 @click.argument("cpuset-name", metavar="<cpuset-name>")
-@click.option("--cpus", metavar="<cpunodeset|numanodeset>", help="Set the CPU nodes used by the cpuset",
+@click.option("--cpus", metavar="<cpus>", help="Set the CPUs used by the cpuset. " + CPUS_HELP,
               callback=cb_cpu_nodeset)
-@click.option("--mems", metavar="<numanodeset>", help="Set the NUMA memory nodes used by the cpuset",
+@click.option("--mems", metavar="<nodes>", help="Set the NUMA memory nodes used by the cpuset. " + MEMS_HELP,
               callback=cb_numa_nodeset)
 @click.option("--partition", type=click.Choice(["member", "root", "isolated"]),
-              help="EXPERIMENTAL: set the cgroup v2 partition type of the cpuset")
+              help="EXPERIMENTAL: set the cgroup v2 partition type of the cpuset. On systemd units, "
+                   "root/isolated need --cpus unless the unit already has AllowedCPUs. "
+                   "Undo restores the previous partition type.")
 @click.pass_obj
-def cpuset_modfify(executor, **args):
-    """modify a cpuset"""
+def cpuset_modify(executor, **args):
+    """modify a cpuset
+
+    Systemd units are changed via systemctl set-property --runtime, other cgroups
+    by direct writes.
+    """
     executor.add(CPUSetModify, args)
 
 
@@ -144,7 +178,10 @@ def cpuset_modfify(executor, **args):
 @click.argument("cpuset-name", metavar="<cpuset-name>")
 @click.pass_obj
 def cpuset_delete(executor, **args):
-    """delete a cpuset"""
+    """delete a cpuset
+
+    Its tasks move to the parent cpuset. Refused for systemd units and /.
+    """
     executor.add(CPUSetDelete, args)
 
 
@@ -153,16 +190,25 @@ def cpuset_delete(executor, **args):
 @click.argument("cpuset-to", metavar="<cpuset-to>")
 @click.pass_obj
 def move_tasks(executor, **args):
-    """move tasks between cpusets"""
+    """move all tasks from one cpuset to another
+
+    Kernel threads and tasks that exited meanwhile are skipped and summarized.
+    """
     executor.add(MoveTasks, args)
 
 
-@cli.command('irq-affinity')
+@cli.command('irq-affinity', help="""manipulate the IRQ affinity of all active IRQs
+
+\b
+irq-affinity mask CPUS  remove the CPUs from each IRQ's affinity; if none
+                        would remain, the IRQ gets all other CPUs
+irq-affinity add CPUS   add the CPUs to each IRQ's affinity
+
+""" + CPUS_DOC)
 @click.argument("operation", type=EnumChoice(IRQAffinityOperation))
-@click.argument("cpus", metavar="<cpunodeset|numanodeset>", callback=cb_cpu_nodeset)
+@click.argument("cpus", metavar="<cpus>", callback=cb_cpu_nodeset)
 @click.pass_obj
 def irq_affinity(executor, **args):
-    """manipulate the IRQ affinity"""
     group = object()  # all IRQs of this command form one failure scope
     for irq in IRQS.active():
         executor.add(IRQAffinity, IRQAffinity.Param(
@@ -172,9 +218,14 @@ def irq_affinity(executor, **args):
         ), group=group)
 
 
-@cli.command('cpu-governor')
+@cli.command('cpu-governor', help="""set the CPU governor for the given CPUs
+
+The governor is checked against each CPU's available governors before anything runs.
+A governor module that is not loaded is refused; load it first (modprobe cpufreq_<name>).
+
+""" + CPUS_DOC)
 @click.argument("governor")
-@click.argument("cpus", metavar="<cpunodeset|numanodeset>", callback=cb_cpu_nodeset)
+@click.argument("cpus", metavar="<cpus>", callback=cb_cpu_nodeset)
 @click.pass_obj
 def cpu_governor(executor, **args):
     """set the CPU governor for the given CPUs"""
@@ -210,7 +261,12 @@ def cpu_governor(executor, **args):
 @click.argument("undo-file", metavar="<undo-file>")
 @click.pass_obj
 def restore(executor, undo_file):
-    """restore a previous state using an undo file"""
+    """restore a previous state using an undo file
+
+    Undoes all recorded runs, newest first. The file is deleted on success; on
+    failures only the failed steps are kept and the exit status is 1, so restore
+    can be retried. Cannot be combined with -u.
+    """
     if executor.undo_file:
         raise click.UsageError("-u/--undo-file cannot be combined with restore")
     privileges.require_root()

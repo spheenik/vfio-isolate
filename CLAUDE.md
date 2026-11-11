@@ -2,62 +2,44 @@
 
 Python CLI (click) for isolating CPUs/memory on Linux hosts running VFIO VMs: cpusets
 (cgroup v2 only), IRQ affinity, CPU governor, drop caches, compact memory, moving tasks.
-Published on PyPI as `vfio-isolate`; entry point `vfio_isolate:run_cli`. cgroup v1 was
-dropped in 0.6; v1 users stay on 0.5.2.
+PyPI `vfio-isolate`, entry point `vfio_isolate:run_cli`. Behavior is specified in
+`openspec/specs/` (OpenSpec; plans in `openspec/changes/`); user docs in README.md,
+breaking changes in CHANGELOG.md.
 
 ## Layout
-- `vfio_isolate/cli.py` — click group with `chain=True`; each subcommand queues an
-  action on the module-level `Executor`, which runs them in order. `main(argv) -> int`
-  is the testable entry point. `-u <file>` appends each action's undo steps to a JSON Lines
-  journal *before* the action runs (`can_execute` -> `record_undo` -> append+fsync -> `execute`);
-  `restore` replays it newest record first, deletes it on success, rewrites it with only the
-  failed steps otherwise.
-- `vfio_isolate/action/` — one `Action` subclass per command, all classmethods:
-  `can_execute`, `execute`, `record_undo` (yields `Execution`s). Actions that need
-  cpusets set `needs_cgroup`. New command = new action + register in
-  `action/__init__.py` + click command in `cli.py` + README.
-- `journal.py` — undo journal: JSON codec (`encode`/`decode`, driven by Param field types),
-  `open_for_append`, `read_journal`, `rewrite`; `JournalError`. No pickle anywhere in the
-  package (never load untrusted pickles; 0.5.x files are detected by first byte and refused).
-  Every action has a stable `name` (= CLI command) and is in `ACTIONS` (`action/__init__.py`);
-  the journal names actions by it. **Undo rule:** an action's `record_undo` yields its steps
-  in the order they must be applied; restore reverses actions, never steps within one.
-- `cpuset.py` — cgroup v2 only; `cgroup_root()` is lazy/cached and raises
-  `HostUnsupportedError` if the host has no v2 cpuset controller. Also `cpu.py`,
-  `irq.py`, `nodeset.py` (CLI forms `C0-3,8` list, `N0` NUMA, `M3c` hex mask parsed in
-  Python; `NodeSetSyntaxError`; bad/empty/nonexistent sets are click usage errors).
-- Errors: `privileges.require_root()` runs first in `Executor.run` and the `restore`
-  callback (`fake_host` patches it). Per-item IRQ/task `OSError`s go to
-  `output.failures` (errno table: expected -> one summary line, others warn), never stop
-  the run. `main()` formats stopping errors with a restore hint; Ctrl-C exits 130.
-- `systemd.py` — `systemctl` only via `_run()`: `unit_for_cgroup()` (mismatch raises
-  `PreconditionError`), `show()` (space lists -> commas), `set_property()` (`--runtime`), `supports()`.
-- `fsroot.py` — `ROOT` + `path()`. All `/sys` and `/proc` access MUST go through
-  `fsroot.path(...)` so tests can redirect it to a fake tree.
-- `nodeset_parser.py` is **generated** from `nodeset.lark` by `./build_parser`
-  (needs `lark`, dev extra). Don't hand-edit it.
+- `cli.py` — click group, `chain=True`; commands only queue actions on the `Executor`
+  (so all validation happens before anything runs). `main(argv) -> int` is the testable
+  entry. Per action: `can_execute` -> `record_undo` -> journal append+fsync -> `execute`.
+  `main()` formats errors (command name, restore hint); Ctrl-C exits 130.
+- `action/` — one `Action` subclass per command, classmethods `can_execute`, `execute`,
+  `record_undo` (yields `Execution`s in the order they must be applied; restore reverses
+  actions, never steps). Stable `name` = CLI command, registered in `ACTIONS`. New command =
+  action + `ACTIONS` + click command + README section (a test checks the heading).
+- `journal.py` — JSON Lines undo journal; 0.5.x pickle files are detected and refused.
+  Never load pickles (the generated parser contains lark's pickle code; it is unused).
+- `cpuset.py` — cgroup v2 only; lazy `cgroup_root()` raises `HostUnsupportedError`.
+- `systemd.py` — `systemctl` only via `_run()`; `set_property()` uses `--runtime`.
+- `nodeset.py` — CLI forms `C` list, `N` NUMA nodes, `M` hex mask (parsed in Python).
+  `nodeset_parser.py` is generated from `nodeset.lark` by `./build_parser` (lark 1.1.5);
+  don't hand-edit.
+- `privileges.require_root()` runs first in `Executor.run` and the `restore` callback.
+- `output.failures` collects per-item IRQ/task `OSError`s (errno table; never stops the run).
+- `fsroot.py` — all `/sys` and `/proc` access MUST go through `fsroot.path(...)`.
 
-## cpuset backends
-- `CPUSetModify` backends: systemd units -> `systemctl set-property --runtime` (AllowedCPUs/
-  AllowedMemoryNodes/CPUSetPartition; `daemon-reload` resets direct writes); other cgroups ->
-  direct writes after `ensure_controller_path()` (enables `cpuset` in ancestors).
-- `cpuset-create/delete` refuse systemd units and `/`. `get_cpus/mems` read *effective*,
-  `get_configured_*` feed undo; getters never write.
-- Empty value = inherit; write `"\n"` (an empty write is a no-op in cgroupfs).
-- Partitions (experimental): undo always restores `member`, never empty (empty
-  `CPUSetPartition=` leaves `isolated invalid`), one `set-property` call with the old cpus.
-  Direct write order: `member` -> partition first; else cpus first. Kernel `invalid` read-back ->
-  `PartitionInvalidError` (exit 1); `restore` repairs it.
+## cpuset rules
+- systemd units -> `systemctl set-property --runtime` (`daemon-reload` resets direct
+  writes); other cgroups -> direct writes after enabling `cpuset` in ancestors.
+- Empty = inherit; write `"\n"` (an empty write is a no-op). Undo uses configured values.
+- Partitions (experimental): undo restores the previous type, never empty (empty
+  `CPUSetPartition=` leaves `isolated invalid`; unset is restored as `member`), one
+  `set-property` call with the old cpus. Direct writes: to `member` -> partition first, else
+  cpus first. Kernel `invalid` read-back -> `PartitionInvalidError` (exit 1).
 
 ## Conventions
-- Packaging is `pyproject.toml` (no `setup.py`).
-- Tests: `tests/`, with a `fake_host` fixture that simulates host layouts under a
-  temp dir. Run: `pip install -e '.[test]'` then `pytest`. Real runs need root.
-- Fake systemd: `sd` fixture in `tests/conftest.py` (fake `_run`, unit table mirrored into the
-  fake cgroup tree, records `set_calls`); proves only files written and systemctl arguments.
-- VM suite `tests/vm` (marker `vm`, excluded by default, skips unless root + PID 1 systemd):
-  `scripts/vm-test --venv <venv>` (virtme-ng, `/dev/kvm`, ~10 s; guest boots `getty.target` only). Never run it as root on the host.
-- Release: bump `version` in `pyproject.toml`, commit as `V x.y.z: <summary>`, build
-  sdist into `dist/`, upload to PyPI.
-- README documents every command and the example scripts; keep it in sync.
-- Uses OpenSpec: proposals/plans in `openspec/changes/`, current specs in `openspec/specs/`.
+- `pyproject.toml` packaging. Tests: `pytest` (fixtures `fake_host`, `sd` fake systemd in
+  `tests/conftest.py`; `require_root` patched). README `sh` blocks are parsed by
+  `tests/test_readme.py`: no prompts, no space after `\`, only variables assigned in the block.
+- VM suite (marker `vm`): `scripts/vm-test --venv <venv>`, ~10 s, guest boots
+  `getty.target`. Never run anything as root on the host.
+- Release: bump `version` in `pyproject.toml`, update CHANGELOG.md, commit
+  `V x.y.z: <summary>`, build sdist into `dist/`, upload to PyPI.

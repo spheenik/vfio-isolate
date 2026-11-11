@@ -1,0 +1,62 @@
+# Changelog
+
+## 0.6.0 (unreleased)
+
+### Breaking changes
+
+- **cgroup v1 is no longer supported.** vfio-isolate needs the cgroup v2 unified hierarchy with the `cpuset`
+  controller. Stay on 0.5.2 if your host uses cgroup v1 or a hybrid layout (`pip install vfio-isolate==0.5.2`).
+  Commands that touch cpusets now fail with a clear error on hosts without a v2 cpuset hierarchy instead of acting on
+  the wrong hierarchy.
+- **The v1-only options of `cpuset-create` and `cpuset-modify` are removed:** `--cpu-exclusive`, `--mem-exclusive`,
+  `--mem-migrate`, `--sched-load-balance`, their `--no-` forms and the short forms (`-ce`, `-nce`, `-me`, `-nme`,
+  `-mm`, `-nmm`, `-lb`, `-nlb`). On v2 they were accepted and silently ignored; remove them from your scripts, they are
+  now usage errors. For exclusive CPUs use the experimental `--partition` option.
+- **Hex masks under `C` are replaced by `M`.** `C` is always a decimal CPU list now; `C000000ff` is a usage error.
+  Write the mask with the `M` prefix instead, e.g. `M3c` or `Mff,0000000f`.
+- **Bare or empty sets and reversed ranges are usage errors** (exit status 2): `C`, `N`, `C7-0`.
+- **The undo file is a JSON Lines journal.** Undo files written by 0.5.x (pickle) are refused by `restore` and `-u`.
+  Finish any VM prepared with 0.5.x first: install 0.5.2 (`pip install vfio-isolate==0.5.2`), run
+  `vfio-isolate restore <file>`, then upgrade.
+- **`-u` appends to an existing journal** instead of replacing the file; `restore` then undoes every recorded run,
+  newest first. Existing files that are not journals, symlinks, files owned by someone else and files writable by group
+  or others are refused. Use a fresh path (for example under `/run`) if you do not want runs to accumulate.
+- **`restore` deletes the journal on success** and, if steps fail, rewrites it with only the failed steps and exits
+  with status 1. Scripts that kept the file after a restore must not rely on it any more.
+- **Root is required.** Any run that queues a command, and `restore`, exits with status 1 and
+  `vfio-isolate: must be run as root` for other users. Run it with `sudo`; `--help` still works unprivileged.
+- **Usage errors exit with status 2** (they were status 1 in 0.5.2, which crashed with a traceback on every error).
+- **`restore` combined with `-u` is a usage error.**
+- **`cpu-governor` validates the governor** against every selected CPU before anything runs; an unknown governor or a
+  CPU without `cpufreq` is now a usage error (exit status 2) and nothing is executed. The kernel loads a governor
+  module on demand when its name is written to `scaling_governor`, but `scaling_available_governors` lists only loaded
+  governors; such a governor is now refused. Load it first (`modprobe cpufreq_<name>`).
+
+### New
+
+- cpusets of systemd units (`*.slice`, `*.scope`, `*.service`) are changed with `systemctl set-property --runtime`,
+  so the setting survives `systemctl daemon-reload`. `cpuset-create` and `cpuset-delete` are refused for systemd units
+  and `/`; `cpuset-modify` is refused for `/`.
+- Cgroups not owned by systemd are written directly, after enabling the `cpuset` controller in their ancestors.
+  Undo restores the configured values, including empty (inherit).
+- Experimental `cpuset-modify --partition member|root|isolated` with read-back validation of the kernel's partition
+  state.
+- The nodeset forms `C` (decimal CPU list), `N` (NUMA nodes) and `M` (hex mask as in `smp_affinity`); a bare `M` or
+  `M0` is rejected like the other empty sets.
+- One-line error messages instead of tracebacks (`vfio-isolate: <command> failed: <reason>`); use `-d` for the
+  traceback.
+- The undo journal is written before each command runs, so a failed or interrupted run can be undone with `restore`.
+- Per-item failure summaries for `irq-affinity` and `move-tasks` (kernel-managed IRQs, kernel threads, exited tasks),
+  with `-v` listing the items; failures that stop a run name the command and the `restore` hint; exit status 130 on
+  Ctrl-C.
+- README rewritten with a section per command and checked examples; `--help` texts describe chaining, the root
+  requirement, exit statuses and the argument forms.
+
+### Fixed
+
+- Undo steps of an action are applied in the right order, which fixes undoing `cpuset-delete` and the IRQ affinities
+  restored after `irq-affinity`.
+- `restore` no longer stops at the first failing step; it attempts every step and reports each failure.
+- Undo of `move-tasks` no longer moves back tasks that were already in the target cpuset.
+- Undo of a cpuset change no longer turns "inherit from parent" into a fixed CPU list (it captured
+  `cpuset.cpus.effective`).

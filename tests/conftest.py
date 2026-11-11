@@ -27,8 +27,11 @@ LAYOUTS = ("v2", "v2-nonstandard", "hybrid", "v1", "no-cpuset", "none")
 class FakeHost:
     """A fake /proc + /sys tree rooted in a tmp dir; fsroot.ROOT points at it."""
 
-    def __init__(self, root: Path, monkeypatch=None):
+    def __init__(self, root: Path, monkeypatch=None, num_cpus: int = NUM_CPUS,
+                 governors: str = "performance powersave schedutil"):
         self.root = root
+        self.num_cpus = num_cpus
+        self.governors = governors
         self._monkeypatch = monkeypatch
         self.layout = None
         self.cgroup_mount = None  # absolute (fake-host) path of the cgroup2 mount, if any
@@ -44,12 +47,12 @@ class FakeHost:
 
     def _build_static(self):
         cpu = "sys/devices/system/cpu"
-        last = NUM_CPUS - 1
-        for n in range(NUM_CPUS):
+        last = self.num_cpus - 1
+        for n in range(self.num_cpus):
             (self.root / cpu / f"cpu{n}").mkdir(parents=True, exist_ok=True)
             self._write(f"{cpu}/cpu{n}/cpufreq/scaling_governor", "powersave\n")
             self._write(f"{cpu}/cpu{n}/cpufreq/scaling_available_governors",
-                        "performance powersave schedutil\n")
+                        self.governors + "\n")
         self._write(f"{cpu}/online", f"0-{last}\n")
         self._write(f"{cpu}/present", f"0-{last}\n")
         self._write(f"{cpu}/possible", f"0-{last}\n")
@@ -67,7 +70,7 @@ class FakeHost:
         d = self.root / mount.lstrip("/")
         d.mkdir(parents=True, exist_ok=True)
         ctl = CONTROLLERS if with_cpuset else CONTROLLERS.replace("cpuset ", "")
-        last = NUM_CPUS - 1
+        last = self.num_cpus - 1
         (d / "cgroup.controllers").write_text(ctl + "\n")
         (d / "cgroup.subtree_control").write_text("\n")
         (d / "cgroup.procs").write_text("")
@@ -341,25 +344,33 @@ class FakeSystemd:
 
 
 @pytest.fixture
-def fake_host(tmp_path, monkeypatch):
-    root = tmp_path / "root"
-    root.mkdir()
-    monkeypatch.setattr(fsroot, "ROOT", str(root))
+def fake_host_factory(tmp_path, monkeypatch):
+    """Returns make(num_cpus=NUM_CPUS, governors=...) -> FakeHost; fake_host is make()."""
     from vfio_isolate import privileges
-    monkeypatch.setattr(privileges, "require_root", lambda: None)
-    # nodeset.py memoizes its sysfs reads in function attributes; clear them
     from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
     funcs = [CPUNodeSet.present_cpus, CPUNodeSet.possible_cpus,
              NUMANodeSet.online_nodes, NUMANodeSet.possible_nodes]
 
     def reset():
+        # nodeset.py memoizes its sysfs reads in function attributes; clear them
         for f in funcs:
             f.value = None
 
-    reset()
-    host = FakeHost(root, monkeypatch)
-    yield host
+    def make(**kwargs):
+        root = tmp_path / "root"
+        root.mkdir()
+        monkeypatch.setattr(fsroot, "ROOT", str(root))
+        monkeypatch.setattr(privileges, "require_root", lambda: None)
+        reset()
+        return FakeHost(root, monkeypatch, **kwargs)
+
+    yield make
     reset()
     from vfio_isolate import cpuset, systemd
     cpuset.reset_cgroup_cache()
     systemd.reset_cache()
+
+
+@pytest.fixture
+def fake_host(fake_host_factory):
+    return fake_host_factory()
