@@ -13,6 +13,7 @@ class IRQAffinityOperation(Enum):
 
 
 class IRQAffinity(Action):
+    name = "irq-affinity"
     @dataclass
     class Param:
         irq: IRQ

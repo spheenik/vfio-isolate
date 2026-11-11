@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 
 from vfio_isolate.cpuset import CPUNodeSet, NUMANodeSet, CPUSet
-from .action import Action, Execution
+from .action import Action, Execution, PreconditionError
 
 
 class CPUSetModify(Action):
+    name = "cpuset-modify"
     needs_cgroup = True
 
     @dataclass
@@ -12,6 +13,12 @@ class CPUSetModify(Action):
         cpuset_name: str
         cpus: CPUNodeSet
         mems: NUMANodeSet
+
+    @classmethod
+    def can_execute(cls, p: Param):
+        if not CPUSet(p.cpuset_name).exists():
+            raise PreconditionError(f"cpuset {p.cpuset_name} does not exist")
+        return True
 
     @classmethod
     def execute(cls, p: Param):

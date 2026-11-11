@@ -5,6 +5,7 @@ from ..cpu import CPU
 
 
 class CPUGovernor(Action):
+    name = "cpu-governor"
     @dataclass
     class Param:
         cpu: CPU

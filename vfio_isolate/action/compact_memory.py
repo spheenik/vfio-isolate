@@ -5,6 +5,7 @@ from .. import fsroot
 
 
 class CompactMemory(Action):
+    name = "compact-memory"
     @dataclass
     class Param:
         pass

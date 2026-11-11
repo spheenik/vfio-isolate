@@ -117,6 +117,9 @@ class CPUSet:
         else:
             self.set_mems(self.parent().get_mems())
 
+    def exists(self) -> bool:
+        return os.path.isdir(self.__path())
+
     def remove(self):
         os.rmdir(self.__path())
 

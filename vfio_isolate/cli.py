@@ -1,14 +1,16 @@
-import pickle
+import json
+import os
 import sys
-from dataclasses import is_dataclass
+from dataclasses import dataclass, is_dataclass
 
 import click
 
 from vfio_isolate.action import *
-from vfio_isolate import cpuset
+from vfio_isolate import cpuset, journal
 from vfio_isolate.cpu import CPU
 from vfio_isolate.cpuset import HostUnsupportedError
 from vfio_isolate.irq import IRQS
+from vfio_isolate.journal import JournalError
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 from vfio_isolate.serialize import *
 
@@ -160,34 +162,96 @@ def cpu_governor(executor, **args):
 @click.pass_obj
 def restore(executor, undo_file):
     """restore a previous state using an undo file"""
-    with open(undo_file, "rb") as f:
-        executions = pickle.load(f)
-    for e in executions:
-        executor.add(e.action, e.params)
+    if executor.undo_file:
+        raise click.UsageError("-u/--undo-file cannot be combined with restore")
+    # read and decode now, so a bad file stops the whole chain before anything runs
+    records = journal.read_journal(undo_file)
+    st = os.stat(undo_file)
+    key = (st.st_dev, st.st_ino)
+    if key in executor.restore_ids:
+        raise click.UsageError(f"undo file {undo_file} given to restore more than once")
+    executor.restore_ids.add(key)
+    executor.add_restore(RestoreBatch(undo_file, records))
+
+
+@dataclass
+class RestoreBatch:
+    path: str
+    records: list  # list[list[Execution]], in file order (oldest first)
 
 
 class Executor:
     def __init__(self):
-        self.executions = []
-        self.undo = []
+        self.executions = []  # Execution or RestoreBatch
         self.undo_file = None
+        self.restore_ids = set()  # (st_dev, st_ino) of journals already queued for restore
 
     def add(self, action_class, params):
         if not is_dataclass(params):
             params = unserialize(action_class.Param, params)
         self.executions.append(Execution(action=action_class, params=params))
 
-    def run(self):
-        # fail before touching anything (record_undo reads cgroup files too)
-        if any(e.action.needs_cgroup for e in self.executions):
-            cpuset.cgroup_root()
+    def add_restore(self, batch):
+        self.executions.append(batch)
+
+    def _needs_cgroup(self):
         for e in self.executions:
-            for undo in e.action.record_undo(e.params):
-                self.undo.append(undo)
-            e.action.execute(e.params)
-        if self.undo_file:
-            with open(self.undo_file, "wb") as f:
-                pickle.dump(self.undo[::-1], f)
+            steps = [s for r in e.records for s in r] if isinstance(e, RestoreBatch) else [e]
+            if any(s.action.needs_cgroup for s in steps):
+                return True
+        return False
+
+    def run(self) -> int:
+        # fail before touching anything (record_undo reads cgroup files too)
+        if self._needs_cgroup():
+            cpuset.cgroup_root()
+        appender = journal.open_for_append(self.undo_file) if self.undo_file else None
+        rc = 0
+        try:
+            for e in self.executions:
+                if isinstance(e, RestoreBatch):
+                    rc = max(rc, self._restore(e))
+                    continue
+                if e.action.can_execute(e.params) is False:
+                    raise PreconditionError(f"{e.action.name}: precondition failed")
+                steps = list(e.action.record_undo(e.params))
+                if appender:
+                    appender.append(steps)
+                e.action.execute(e.params)
+        finally:
+            if appender:
+                appender.close()
+        return rc
+
+    @staticmethod
+    def _restore(batch) -> int:
+        failed_records = []
+        # newest record first, steps within a record in recorded order
+        for record in reversed(batch.records):
+            failed = []
+            for step in record:
+                try:
+                    step.action.execute(step.params)
+                except Exception as ex:
+                    try:
+                        params = json.dumps(journal.encode(step)["params"])
+                    except Exception:
+                        params = repr(step.params)
+                    print(f"restore: {step.action.name} {params}: {ex}", file=sys.stderr)
+                    failed.append(step)
+            if failed:
+                failed_records.append(failed)
+        try:
+            if not failed_records:
+                os.unlink(batch.path)
+                return 0
+            failed_records.reverse()  # back to file order
+            journal.rewrite(batch.path, failed_records)
+        except (OSError, JournalError) as ex:
+            print(f"vfio-isolate: could not update journal {batch.path}: {ex} "
+                  f"(journal left as it was)", file=sys.stderr)
+            return 1
+        return 1
 
 
 def main(argv=None) -> int:
@@ -196,6 +260,7 @@ def main(argv=None) -> int:
         rv = cli.main(args=argv, prog_name="vfio-isolate", standalone_mode=False, obj=executor)
         if isinstance(rv, int):
             return rv
+        return executor.run()
     except click.exceptions.Exit as e:
         return e.exit_code
     except click.exceptions.Abort:
@@ -203,12 +268,9 @@ def main(argv=None) -> int:
     except click.ClickException as e:
         e.show()
         return e.exit_code
-    try:
-        executor.run()
-    except HostUnsupportedError as e:
+    except (HostUnsupportedError, JournalError, PreconditionError) as e:
         print(f"vfio-isolate: {e}", file=sys.stderr)
         return 1
-    return 0
 
 
 def run_cli():

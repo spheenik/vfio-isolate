@@ -64,6 +64,7 @@ def test_undo_file_and_restore(fake_host, tmp_path):
     assert main(["-u", undo, "cpuset-modify", "--cpus", "C0-3", "/host"]) == 0
     assert (cg / "cpuset.cpus").read_text() == "0-3"
     # the undo captures cpuset.cpus.effective (0-7 in the fake), not cpuset.cpus
+    # (detailed journal scenarios live in test_undo.py)
     assert main(["restore", undo]) == 0
     assert (cg / "cpuset.cpus").read_text() == "0-7"
 
@@ -73,7 +74,8 @@ def test_restore_checked_before_executing(fake_host, tmp_path, capsys):
     undo = str(tmp_path / "undo")
     assert main(["-u", undo, "cpuset-modify", "--cpus", "C0-3", "/host"]) == 0
     fake_host.set_layout("hybrid")
-    # drop-caches would run first; the pre-check must stop everything before it
+    # drop-caches would run first; the pre-check (which looks into the restore's
+    # steps) must stop everything before it
     assert main(["drop-caches", "restore", undo]) == 1
     assert "bound to a cgroup v1" in capsys.readouterr().err
     assert fake_host.read("proc/sys/vm/drop_caches") == "0"

@@ -1,3 +1,5 @@
+import errno
+import os
 import shutil
 from pathlib import Path
 
@@ -24,8 +26,9 @@ LAYOUTS = ("v2", "v2-nonstandard", "hybrid", "v1", "no-cpuset", "none")
 class FakeHost:
     """A fake /proc + /sys tree rooted in a tmp dir; fsroot.ROOT points at it."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, monkeypatch=None):
         self.root = root
+        self._monkeypatch = monkeypatch
         self.layout = None
         self.cgroup_mount = None  # absolute (fake-host) path of the cgroup2 mount, if any
         self._build_static()
@@ -43,6 +46,9 @@ class FakeHost:
         last = NUM_CPUS - 1
         for n in range(NUM_CPUS):
             (self.root / cpu / f"cpu{n}").mkdir(parents=True, exist_ok=True)
+            self._write(f"{cpu}/cpu{n}/cpufreq/scaling_governor", "powersave\n")
+            self._write(f"{cpu}/cpu{n}/cpufreq/scaling_available_governors",
+                        "performance powersave schedutil\n")
         self._write(f"{cpu}/online", f"0-{last}\n")
         self._write(f"{cpu}/present", f"0-{last}\n")
         self._write(f"{cpu}/possible", f"0-{last}\n")
@@ -109,6 +115,11 @@ class FakeHost:
             raise RuntimeError(f"layout {self.layout!r} has no cgroup2 mount")
         d = self.root / self.cgroup_mount.lstrip("/") / name
         d.mkdir(parents=True, exist_ok=True)
+        self._populate_child(d, cpus, mems)
+        return d
+
+    @staticmethod
+    def _populate_child(d: Path, cpus: str, mems: str):
         (d / "cgroup.controllers").write_text(CONTROLLERS + "\n")
         (d / "cgroup.subtree_control").write_text("\n")
         (d / "cgroup.procs").write_text("")
@@ -116,7 +127,44 @@ class FakeHost:
         (d / "cpuset.mems").write_text("\n")
         (d / "cpuset.cpus.effective").write_text(cpus + "\n")
         (d / "cpuset.mems.effective").write_text(mems + "\n")
-        return d
+
+    def add_irq(self, number: int, affinity: str = "0-7"):
+        """Create /proc/irq/<number>/smp_affinity_list (irq-affinity iterates /proc/irq)."""
+        self._write(f"proc/irq/{number}/smp_affinity_list", affinity + "\n")
+
+    def patch_cgroup_fs(self):
+        """Opt in: os.mkdir/os.rmdir below the cgroup2 mount behave like cgroupfs.
+
+        mkdir populates the control files the kernel creates; rmdir removes the
+        directory together with its files (and fails with ENOTEMPTY if it has children).
+        """
+        mount = str(self.root / self.cgroup_mount.lstrip("/"))
+        real_mkdir, real_rmdir = os.mkdir, os.rmdir
+
+        def inside(path):
+            path = os.fspath(path)
+            return path.startswith(mount + "/")
+
+        def mkdir(path, *args, **kwargs):
+            real_mkdir(path, *args, **kwargs)
+            if inside(path):
+                d = Path(path)
+                parent = d.parent
+                cpus = (parent / "cpuset.cpus.effective").read_text().strip()
+                mems = (parent / "cpuset.mems.effective").read_text().strip()
+                self._populate_child(d, cpus, mems)
+
+        def rmdir(path, *args, **kwargs):
+            if inside(path):
+                entries = list(os.scandir(path))
+                if any(e.is_dir(follow_symlinks=False) for e in entries):
+                    raise OSError(errno.ENOTEMPTY, os.strerror(errno.ENOTEMPTY), os.fspath(path))
+                for e in entries:
+                    os.unlink(e.path)
+            real_rmdir(path, *args, **kwargs)
+
+        self._monkeypatch.setattr(os, "mkdir", mkdir)
+        self._monkeypatch.setattr(os, "rmdir", rmdir)
 
     def read(self, relpath: str) -> str:
         return (self.root / relpath.lstrip("/")).read_text()
@@ -137,7 +185,7 @@ def fake_host(tmp_path, monkeypatch):
             f.value = None
 
     reset()
-    host = FakeHost(root)
+    host = FakeHost(root, monkeypatch)
     yield host
     reset()
     from vfio_isolate import cpuset

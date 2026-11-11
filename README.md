@@ -101,8 +101,9 @@ To pin the VM cores, use libvirt:
 
 #### Undo
 
-vfio-isolate is able to record all the changes that it did and storing a recipe to undo them into a file, to be executed
-later.
+vfio-isolate is able to record all the changes that it did and storing a recipe to undo them into a journal file, to be
+executed later. The journal is a plain text file (JSON Lines) that is written before each change is made, so it is
+complete even if a run fails half way.
 
 ```
  # vfio-isolate -u /tmp/undo_description \ 
@@ -116,6 +117,16 @@ This will create the `test.slice` cpuset, and also a file `/tmp/undo_description
 ```
 
 will remove `test.slice`. This works with all the subcommands that vfio-isolate supports. 
+
+- If the undo file already exists and is a journal, later runs with `-u` append to it. `restore` then undoes every
+  recorded run, newest first, back to the state before the first one.
+- `restore` continues past steps that fail and reports them on stderr. If everything succeeded the file is deleted;
+  otherwise it is rewritten to contain only the failed steps, and the exit status is non-zero, so you can fix the problem
+  and run `restore` again.
+- The file is created with mode 0600. Symlinks, files not owned by you and files writable by others are refused.
+  `-u` and `restore` can not be used in the same command.
+- Undo files written by vfio-isolate 0.5.x are not supported and are refused. Run `restore` with 0.5.2
+  (`pip install vfio-isolate==0.5.2`) for any VM prepared with 0.5.x before upgrading.
 
 #### Deleting a cpuset
 

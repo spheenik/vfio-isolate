@@ -2,6 +2,10 @@ from dataclasses import dataclass
 from typing import Generator
 
 
+class PreconditionError(Exception):
+    pass
+
+
 @dataclass
 class Execution:
     action: type
@@ -9,6 +13,7 @@ class Execution:
 
 
 class Action:
+    name = None
     needs_cgroup = False
 
     @classmethod

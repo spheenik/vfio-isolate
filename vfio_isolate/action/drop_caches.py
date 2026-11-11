@@ -5,6 +5,7 @@ from .. import fsroot
 
 
 class DropCaches(Action):
+    name = "drop-caches"
     @dataclass
     class Param:
         pass
