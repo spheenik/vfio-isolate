@@ -7,8 +7,9 @@ import click
 
 from vfio_isolate.action import *
 from vfio_isolate import cpuset, journal
+from vfio_isolate.systemd import SystemctlError
 from vfio_isolate.cpu import CPU
-from vfio_isolate.cpuset import HostUnsupportedError
+from vfio_isolate.cpuset import HostUnsupportedError, PartitionInvalidError
 from vfio_isolate.irq import IRQS
 from vfio_isolate.journal import JournalError
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
@@ -106,6 +107,8 @@ def cpuset_create(executor, **args):
               callback=cb_cpu_nodeset)
 @click.option("--mems", metavar="<numanodeset>", help="Set the NUMA memory nodes used by the cpuset",
               callback=cb_numa_nodeset)
+@click.option("--partition", type=click.Choice(["member", "root", "isolated"]),
+              help="EXPERIMENTAL: set the cgroup v2 partition type of the cpuset")
 @click.pass_obj
 def cpuset_modfify(executor, **args):
     """modify a cpuset"""
@@ -268,7 +271,10 @@ def main(argv=None) -> int:
     except click.ClickException as e:
         e.show()
         return e.exit_code
-    except (HostUnsupportedError, JournalError, PreconditionError) as e:
+    except PartitionInvalidError as e:
+        print(f"vfio-isolate: partition invalid: {e}", file=sys.stderr)
+        return 1
+    except (HostUnsupportedError, JournalError, PreconditionError, SystemctlError) as e:
         print(f"vfio-isolate: {e}", file=sys.stderr)
         return 1
 

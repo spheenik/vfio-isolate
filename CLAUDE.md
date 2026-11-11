@@ -25,15 +25,33 @@ dropped in 0.6; v1 users stay on 0.5.2.
 - `cpuset.py` — cgroup v2 only; `cgroup_root()` is lazy/cached and raises
   `HostUnsupportedError` if the host has no v2 cpuset controller. Also `cpu.py`,
   `irq.py`, `nodeset.py` (C/N nodeset types, e.g. `C0-3,8`, `N0`).
+- `systemd.py` — `systemctl` only via `_run()`: `unit_for_cgroup()` (mismatch raises
+  `PreconditionError`), `show()` (space lists -> commas), `set_property()` (`--runtime`), `supports()`.
 - `fsroot.py` — `ROOT` + `path()`. All `/sys` and `/proc` access MUST go through
   `fsroot.path(...)` so tests can redirect it to a fake tree.
 - `nodeset_parser.py` is **generated** from `nodeset.lark` by `./build_parser`
   (needs `lark`, dev extra). Don't hand-edit it.
 
+## cpuset backends
+- `CPUSetModify` backends: systemd units -> `systemctl set-property --runtime` (AllowedCPUs/
+  AllowedMemoryNodes/CPUSetPartition; `daemon-reload` resets direct writes); other cgroups ->
+  direct writes after `ensure_controller_path()` (enables `cpuset` in ancestors).
+- `cpuset-create/delete` refuse systemd units and `/`. `get_cpus/mems` read *effective*,
+  `get_configured_*` feed undo; getters never write.
+- Empty value = inherit; write `"\n"` (an empty write is a no-op in cgroupfs).
+- Partitions (experimental): undo always restores `member`, never empty (empty
+  `CPUSetPartition=` leaves `isolated invalid`), one `set-property` call with the old cpus.
+  Direct write order: `member` -> partition first; else cpus first. Kernel `invalid` read-back ->
+  `PartitionInvalidError` (exit 1); `restore` repairs it.
+
 ## Conventions
 - Packaging is `pyproject.toml` (no `setup.py`).
 - Tests: `tests/`, with a `fake_host` fixture that simulates host layouts under a
   temp dir. Run: `pip install -e '.[test]'` then `pytest`. Real runs need root.
+- Fake systemd: `sd` fixture in `tests/conftest.py` (fake `_run`, unit table mirrored into the
+  fake cgroup tree, records `set_calls`); proves only files written and systemctl arguments.
+- VM suite `tests/vm` (marker `vm`, excluded by default, skips unless root + PID 1 systemd):
+  `scripts/vm-test --venv <venv>` (virtme-ng, `/dev/kvm`, 2-3 min). Never run it as root on the host.
 - Release: bump `version` in `pyproject.toml`, commit as `V x.y.z: <summary>`, build
   sdist into `dist/`, upload to PyPI.
 - README documents every command and the example scripts; keep it in sync.

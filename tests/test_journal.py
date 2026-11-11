@@ -87,6 +87,63 @@ def test_bad_enum_and_nodeset_rejected():
         decode({"action": "irq-affinity", "params": {"irq": 1, "operation": "add", "cpus": "zz!"}})
 
 
+@pytest.fixture
+def typed_action(monkeypatch):
+    from dataclasses import dataclass, field
+    from typing import List, Optional
+    from vfio_isolate.action.action import Action
+
+    class Typed(Action):
+        name = "test-typed"
+
+        @dataclass
+        class Param:
+            label: str
+            pids: List[int] = field(default_factory=list)
+            note: Optional[str] = None
+            cpus: Optional[CPUNodeSet] = None
+            limit: int = 7
+
+    monkeypatch.setitem(ACTIONS, "test-typed", Typed)
+    return Typed
+
+
+def test_optional_and_list_roundtrip(typed_action):
+    for p in (typed_action.Param(label="a", pids=[1, 22], note="x", cpus=CPUNodeSet("0-2"), limit=3),
+              typed_action.Param(label="a", pids=[], note=None, cpus=None)):
+        e = Execution(typed_action, p)
+        d = json.loads(json.dumps(encode(e)))
+        assert isinstance(d["params"]["pids"], list)
+        back = decode(d)
+        assert back.params == p or encode(back) == encode(e)
+        assert encode(back) == encode(e)
+        assert back.params.pids == p.pids
+
+
+def test_missing_field_takes_default(typed_action):
+    e = decode({"action": "test-typed", "params": {"label": "a"}})
+    assert e.params == typed_action.Param(label="a", pids=[], note=None, cpus=None, limit=7)
+
+
+def test_missing_field_without_default_and_unknown_still_rejected(typed_action):
+    with pytest.raises(JournalError):
+        decode({"action": "test-typed", "params": {"pids": [1]}})
+    with pytest.raises(JournalError):
+        decode({"action": "test-typed", "params": {"label": "a", "bogus": 1}})
+
+
+@pytest.mark.parametrize("bad", [{"pids": "1,2"}, {"pids": [1, "2"]}, {"pids": [True]},
+                                 {"pids": [1.5]}, {"pids": None}, {"note": 5}])
+def test_list_and_optional_strict(typed_action, bad):
+    with pytest.raises(JournalError):
+        decode({"action": "test-typed", "params": {"label": "a", **bad}})
+
+
+def test_encode_list_strict(typed_action):
+    with pytest.raises(JournalError):
+        encode(Execution(typed_action, typed_action.Param(label="a", pids=["x"])))
+
+
 # ---------------------------------------------------------------- file
 
 def steps(name="/a"):

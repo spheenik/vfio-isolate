@@ -1,0 +1,81 @@
+#!/bin/bash
+# Run the VM test suite (tests/vm) inside a virtme-ng guest with systemd as PID 1.
+#
+# usage: scripts/vm-test [--venv PATH] [pytest args...]
+#
+# The venv (default: $VFIO_ISOLATE_VM_VENV) must have vfio-isolate (editable) and pytest
+# installed. The guest does not see the host's /tmp, so the venv is shared read-only with
+# --rodir; results go to .vm-test/ in the repository (shared read-write). The exit code is
+# 0 only if pytest passed, at least one test ran and none was skipped.
+set -u
+
+TIMEOUT=${VFIO_ISOLATE_VM_TIMEOUT:-600}
+venv=${VFIO_ISOLATE_VM_VENV:-}
+if [ "${1:-}" = "--venv" ]; then
+    [ $# -ge 2 ] || { echo "scripts/vm-test: --venv needs a path" >&2; exit 2; }
+    venv=$2
+    shift 2
+fi
+if [ -z "$venv" ]; then
+    echo "scripts/vm-test: no venv given; use --venv PATH or set VFIO_ISOLATE_VM_VENV" >&2
+    echo "  (a venv with 'pip install -e .[test]' done in it)" >&2
+    exit 2
+fi
+if [ ! -x "$venv/bin/python" ]; then
+    echo "scripts/vm-test: $venv/bin/python not found" >&2
+    exit 2
+fi
+command -v vng >/dev/null 2>&1 || { echo "scripts/vm-test: vng (virtme-ng) not found" >&2; exit 2; }
+
+venv=$(cd "$venv" && pwd -P)
+# a cwd under /tmp breaks --exec
+cd "$(dirname "$0")/.." || exit 2
+repo=$(pwd -P)
+
+res="$repo/.vm-test"
+mkdir -p "$res" || exit 2
+rm -f "$res/rc" "$res/out" "$res/junit.xml" "$res/vng.log"
+
+# the inner script is static; paths and pytest args reach it through the environment
+cat >"$res/inner.sh" <<'INNER'
+#!/bin/sh
+cd "$VM_REPO" || exit 99
+export VFIO_ISOLATE_IN_VM=1 PYTHONDONTWRITEBYTECODE=1
+systemctl is-system-running --wait >/dev/null 2>&1   # "degraded" is fine
+"$VM_VENV/bin/python" -m pytest -m vm -p no:cacheprovider --junitxml="$VM_RES/junit.xml" \
+    tests/vm "$@" >"$VM_RES/out" 2>&1
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    # a vacuous pass (everything skipped, nothing collected) is a failure
+    "$VM_VENV/bin/python" -I - "$VM_RES/junit.xml" >>"$VM_RES/out" 2>&1 <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+suite = ET.parse(sys.argv[1]).getroot()
+if suite.tag == "testsuites":
+    suite = suite[0]
+n, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+if n == 0 or skipped:
+    print(f"scripts/vm-test: FAIL: {n} tests, {skipped} skipped (VM tests must all run)")
+    sys.exit(1)
+PY
+    rc=$?
+fi
+echo "$rc" >"$VM_RES/rc"
+INNER
+
+# the extra args are passed through "$@" of the inner script, so they need no quoting here
+VM_REPO=$repo VM_VENV=$venv VM_RES=$res \
+timeout --kill-after=10 "$TIMEOUT" vng --run --systemd --user root --cpus 8 \
+    --rodir="$venv=$venv" --rwdir="$res=$res" \
+    --exec "VM_REPO=$(printf %q "$repo") VM_VENV=$(printf %q "$venv") VM_RES=$(printf %q "$res") sh $(printf %q "$res/inner.sh") $(for a in "$@"; do printf '%q ' "$a"; done)" \
+    >"$res/vng.log" 2>&1
+vng_rc=$?
+
+[ -f "$res/out" ] && cat "$res/out"
+if [ ! -f "$res/rc" ]; then
+    echo "scripts/vm-test: guest produced no result (vng rc=$vng_rc); vng log:" >&2
+    tail -n 40 "$res/vng.log" >&2
+    { [ "$vng_rc" -eq 124 ] || [ "$vng_rc" -eq 137 ]; } && echo "scripts/vm-test: timed out after ${TIMEOUT}s" >&2
+    exit 1
+fi
+exit "$(cat "$res/rc")"

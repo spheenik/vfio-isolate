@@ -99,6 +99,44 @@ To pin the VM cores, use libvirt:
   </cputune>
 ```
 
+#### systemd hosts
+
+On hosts running systemd, `cpuset-modify` on a systemd unit (`*.slice`, `*.scope`, `*.service`, ...) does not write
+to the cgroup files. It runs `systemctl set-property --runtime <unit> AllowedCPUs=... AllowedMemoryNodes=...
+CPUSetPartition=...` instead, so systemd stays the owner of that cgroup. The setting survives `systemctl
+daemon-reload`; a value written directly into `cpuset.cpus` of a slice would be silently reset by a reload, losing
+the isolation. `restore` resets the properties through systemd as well.
+
+- Prefer restricting slices (`cpuset-modify` on `/system.slice`, `/user.slice`, `/init.scope`) over `move-tasks` on
+  systemd hosts: moving processes out of their units confuses systemd's accounting.
+- `cpuset-create` and `cpuset-delete` are refused for systemd units, and `cpuset-create` is refused below a systemd
+  unit that is not delegated (`Delegate=yes`), because systemd owns those cgroups.
+- Cgroups that systemd does not manage (for example `/mygroup`) are written directly; the `cpuset` controller is
+  enabled in their ancestors as needed.
+- Without `--cpus`/`--mems` a new cpuset inherits its parent's values.
+
+#### Exclusive CPUs with a partition (EXPERIMENTAL)
+
+`cpuset-modify --partition [member|root|isolated]` sets the cgroup v2 partition type. An `isolated` partition removes
+its CPUs from the scheduler domains of everything else, which is stronger than plain restriction. Example: isolate
+the CPUs of the VM in `machine.slice`:
+
+```
+ sudo vfio-isolate -u /tmp/undo_partition \
+    cpuset-modify --cpus C0-6,16-22 /init.scope \
+    cpuset-modify --cpus C0-6,16-22 /system.slice \
+    cpuset-modify --cpus C0-6,16-22 /user.slice \
+    cpuset-modify --cpus C8-15,24-31 --partition isolated /machine.slice
+```
+
+Restricting the other top-level slices first is not required: the kernel removes the partition's CPUs from the
+effective CPUs of the siblings anyway. It is shown for clarity about where host work runs. The kernel validates the
+partition; if it ends up `invalid`, the tool reports the reason and exits with status 1, and `restore` repairs it.
+Undo restores the previous partition type (on the systemd route, a previously unset value is restored as `member`).
+
+Pin vCPUs only to CPUs inside the partition. How libvirt's own per-vCPU cpuset handling behaves inside an isolated
+`machine.slice` is untested.
+
 #### Undo
 
 vfio-isolate is able to record all the changes that it did and storing a recipe to undo them into a journal file, to be
@@ -209,5 +247,15 @@ case "$2" in
 esac
 ```
 
-   
+#### Running the tests
 
+`pip install -e '.[test]'` and `pytest` run the unit tests against a fake cgroup tree. The `tests/vm` suite runs the
+real CLI against a real kernel and systemd inside a throwaway QEMU VM (the host kernel, root file system read-only
+with an in-memory overlay). It needs virtme-ng (`sudo pacman -S virtme-ng` or the distribution equivalent) and
+`/dev/kvm`:
+
+```
+ scripts/vm-test --venv /path/to/venv      # a venv with 'pip install -e .[test]' done in it
+```
+
+It takes a few minutes; extra arguments are passed to pytest. Nothing is run as root on the host.

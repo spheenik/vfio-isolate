@@ -63,10 +63,10 @@ def test_undo_file_and_restore(fake_host, tmp_path):
     undo = str(tmp_path / "undo")
     assert main(["-u", undo, "cpuset-modify", "--cpus", "C0-3", "/host"]) == 0
     assert (cg / "cpuset.cpus").read_text() == "0-3"
-    # the undo captures cpuset.cpus.effective (0-7 in the fake), not cpuset.cpus
+    # the undo captures the configured cpuset.cpus (empty = inherit)
     # (detailed journal scenarios live in test_undo.py)
     assert main(["restore", undo]) == 0
-    assert (cg / "cpuset.cpus").read_text() == "0-7"
+    assert (cg / "cpuset.cpus").read_text() == "\n"
 
 
 def test_restore_checked_before_executing(fake_host, tmp_path, capsys):
@@ -93,3 +93,43 @@ def test_create_help(fake_host, capsys):
     out = capsys.readouterr().out
     assert "--cpus" in out and "--mems" in out
     assert "cgroup v1" not in out and "exclusive" not in out
+
+
+# cpuset-commands scenarios for --partition (cgroup2-cpuset); fake-only
+
+def test_modify_help_shows_partition_experimental(fake_host, capsys):
+    """fake-only."""
+    assert main(["cpuset-modify", "--help"]) == 0
+    out = capsys.readouterr().out
+    assert "--partition" in out and "EXPERIMENTAL" in out
+    assert "member" in out and "isolated" in out
+    assert main(["cpuset-create", "--help"]) == 0
+    assert "--partition" not in capsys.readouterr().out
+
+
+def test_invalid_partition_value_is_usage_error(fake_host, capsys):
+    """Invalid --partition: usage error listing the choices, nothing in the chain ran.
+    fake-only."""
+    cg = fake_host.mkcg("host")
+    rc = main(["drop-caches", "cpuset-modify", "--partition", "exclusive", "/host"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    for choice in ("member", "root", "isolated"):
+        assert choice in err
+    assert fake_host.read("proc/sys/vm/drop_caches") == "0"
+    assert (cg / "cpuset.cpus").read_text() == "\n"
+
+
+def test_systemctl_error_exits_1(fake_host, capsys):
+    """A failing systemctl call is a clean exit 1 without traceback. fake-only."""
+    from vfio_isolate.systemd import SystemctlError
+    sd = fake_host.enable_systemd(units={"machine.slice": "/machine.slice"})
+
+    def boom(args):
+        if args and args[0] == "set-property":
+            raise SystemctlError("systemctl set-property failed (1): nope")
+        return sd.run(args)
+    fake_host._monkeypatch.setattr("vfio_isolate.systemd._run", boom)
+    assert main(["cpuset-modify", "--cpus", "C0-3", "/machine.slice"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("vfio-isolate: ") and "nope" in err and "Traceback" not in err

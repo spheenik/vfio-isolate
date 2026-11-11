@@ -2,6 +2,7 @@ import errno
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -109,22 +110,57 @@ class FakeHost:
         cpuset.reset_cgroup_cache()
 
     # -- helpers ---------------------------------------------------------------------
-    def mkcg(self, name: str, cpus: str = "0-7", mems: str = "0") -> Path:
-        """Create a child cgroup under the cgroup2 mount, with the files the kernel creates."""
+    def mkcg(self, name: str, cpus: Optional[str] = "0-7", mems: Optional[str] = "0",
+             cpuset_files: bool = True) -> Path:
+        """Create a child cgroup under the cgroup2 mount, with the files the kernel creates.
+
+        cpus/mems are the effective values; None inherits the parent's effective values.
+        The configured cpuset.cpus/cpuset.mems files always start empty ("\\n").
+        cpuset_files=False creates the child as the kernel does when the parent lacks cpuset
+        in subtree_control: no cpuset.* files (call lazy_cpuset_files() so that enabling the
+        controller in the parent creates them)."""
         if self.cgroup_mount is None:
             raise RuntimeError(f"layout {self.layout!r} has no cgroup2 mount")
         d = self.root / self.cgroup_mount.lstrip("/") / name
         d.mkdir(parents=True, exist_ok=True)
-        self._populate_child(d, cpus, mems)
+        if cpus is None:
+            cpus = (d.parent / "cpuset.cpus.effective").read_text().strip()
+        if mems is None:
+            mems = (d.parent / "cpuset.mems.effective").read_text().strip()
+        self._populate_child(d, cpus, mems, cpuset_files)
+        if not cpuset_files:  # patch_cgroup_fs may have populated them on mkdir
+            for f in d.glob("cpuset.*"):
+                f.unlink()
         return d
 
+    def lazy_cpuset_files(self):
+        """Opt in: opening a cgroup.subtree_control for writing creates the cpuset.* files in
+        child cgroups that lack them, like +cpuset does in the kernel (tool code only)."""
+        from vfio_isolate import cpuset
+        host = self
+
+        def fake_open(path, mode="r", *a, **kw):
+            path = os.fspath(path)
+            if "w" in mode and path.endswith("/cgroup.subtree_control"):
+                for child in Path(path).parent.iterdir():
+                    if child.is_dir() and not (child / "cpuset.cpus").exists():
+                        parent_eff = child.parent / "cpuset.cpus.effective"
+                        host._populate_child(child, parent_eff.read_text().strip(),
+                                             (child.parent / "cpuset.mems.effective").read_text().strip())
+            return open(path, mode, *a, **kw)
+
+        self._monkeypatch.setattr(cpuset, "open", fake_open, raising=False)
+
     @staticmethod
-    def _populate_child(d: Path, cpus: str, mems: str):
+    def _populate_child(d: Path, cpus: str, mems: str, cpuset_files: bool = True):
         (d / "cgroup.controllers").write_text(CONTROLLERS + "\n")
         (d / "cgroup.subtree_control").write_text("\n")
         (d / "cgroup.procs").write_text("")
+        if not cpuset_files:
+            return
         (d / "cpuset.cpus").write_text("\n")
         (d / "cpuset.mems").write_text("\n")
+        (d / "cpuset.cpus.partition").write_text("member\n")
         (d / "cpuset.cpus.effective").write_text(cpus + "\n")
         (d / "cpuset.mems.effective").write_text(mems + "\n")
 
@@ -169,6 +205,140 @@ class FakeHost:
     def read(self, relpath: str) -> str:
         return (self.root / relpath.lstrip("/")).read_text()
 
+    def enable_systemd(self, units=None, supports_partition=True) -> "FakeSystemd":
+        """Opt in: pretend systemd is PID 1 and replace systemd._run with a fake systemctl.
+
+        units: {unit name: ControlGroup path}; the cgroup directories are created if missing.
+        The returned FakeSystemd (also self.systemd) keeps the unit table and records calls.
+        """
+        (self.root / "run/systemd/system").mkdir(parents=True, exist_ok=True)
+        from vfio_isolate import systemd
+        fake = FakeSystemd(self, supports_partition)
+        for unit, cg in (units or {}).items():
+            fake.add_unit(unit, cg)
+        self._monkeypatch.setattr(systemd, "_run", fake.run)
+        systemd.reset_cache()
+        self.systemd = fake
+        return fake
+
+
+def _nl(value: str) -> str:
+    return (value + "\n") if value else "\n"
+
+
+class FakeSystemd:
+    """Fake `systemctl` for the subset vfio_isolate uses (show, set-property --runtime).
+
+    units: unit name -> {"ControlGroup": path, "AllowedCPUs": str, "AllowedMemoryNodes": str,
+    "CPUSetPartition": str}; list values are held comma separated (as in cgroupfs) and
+    printed space separated by `show` (as real systemd does). set-property mirrors the
+    properties into the fake cgroup tree. calls: every systemctl invocation (argv lists
+    without "systemctl"); set_calls: just the set-property ones.
+    """
+
+    KNOWN = ("ControlGroup", "AllowedCPUs", "AllowedMemoryNodes", "CPUSetPartition", "Delegate")
+    PARTITION_INVALID = "isolated invalid (Invalid cpu list in cpuset.cpus.exclusive)"
+
+    def __init__(self, host: FakeHost, supports_partition=True):
+        self.host = host
+        self.supports_partition = supports_partition
+        self.units = {}
+        self.calls = []
+
+    @property
+    def set_calls(self):
+        return [c for c in self.calls if c and c[0] == "set-property"]
+
+    def known(self):
+        return [p for p in self.KNOWN if p != "CPUSetPartition" or self.supports_partition]
+
+    def add_unit(self, unit: str, cgroup: str, **props):
+        if self.host.cgroup_mount is not None:
+            d = self.host.root / self.host.cgroup_mount.lstrip("/") / cgroup.strip("/")
+            if not d.exists():
+                self.host.mkcg(cgroup.strip("/"))
+            part = d / "cpuset.cpus.partition"
+            if not part.exists():
+                part.write_text("member\n")
+        self.units[unit] = {"ControlGroup": cgroup, "AllowedCPUs": "", "AllowedMemoryNodes": "",
+                            "CPUSetPartition": "", "Delegate": "no"}
+        self.units[unit].update(props)
+
+    def cgroup_dir(self, unit: str) -> Path:
+        cg = self.units[unit]["ControlGroup"].strip("/")
+        return self.host.root / self.host.cgroup_mount.lstrip("/") / cg
+
+    # -- the fake systemctl ----------------------------------------------------------
+    def run(self, args) -> str:
+        from vfio_isolate.systemd import SystemctlError
+        args = list(args)
+        self.calls.append(list(args))
+        if "--" in args:  # end of options: what follows is a unit name, never an option
+            args.remove("--")
+        if not args:
+            raise SystemctlError("systemctl: no command")
+        if args[0] == "show":
+            return self._show(args[1:])
+        if args[0] == "set-property":
+            return self._set_property(args[1:])
+        raise SystemctlError(f"fake systemctl: unsupported command {args[0]}")
+
+    def _show(self, args):
+        props, value_only, unit = [], False, None
+        it = iter(args)
+        for a in it:
+            if a == "-p":
+                props.append(next(it))
+            elif a == "--value":
+                value_only = True
+            else:
+                unit = a
+        known = self.known()
+        if not props:
+            props = known
+        u = self.units.get(unit)
+        lines = []
+        for p in props:
+            if p not in known:
+                continue
+            v = u[p] if u else ""
+            if p in ("AllowedCPUs", "AllowedMemoryNodes"):
+                v = v.replace(",", " ")
+            lines.append(v if value_only else f"{p}={v}")
+        return "".join(l + "\n" for l in lines)
+
+    def _set_property(self, args):
+        from vfio_isolate.systemd import SystemctlError
+        if not args or args[0] != "--runtime":
+            raise SystemctlError("fake systemctl: set-property without --runtime")
+        unit, assigns = args[1], args[2:]
+        if unit not in self.units:
+            raise SystemctlError(f"Unit {unit} not loaded.")
+        new = {}
+        for a in assigns:
+            k, sep, v = a.partition("=")
+            if not sep or k not in self.known() or k in ("ControlGroup", "Delegate"):
+                raise SystemctlError(f"Unknown assignment: {a}")
+            new[k] = ",".join(v.split()) if k.startswith("Allowed") else v
+        u = self.units[unit]
+        old_partition = (self.cgroup_dir(unit) / "cpuset.cpus.partition").read_text().strip()
+        u.update(new)
+        d = self.cgroup_dir(unit)
+        parent = d.parent
+        for prop, f in (("AllowedCPUs", "cpus"), ("AllowedMemoryNodes", "mems")):
+            if prop in new:
+                (d / f"cpuset.{f}").write_text(_nl(new[prop]))
+                eff = new[prop] or (parent / f"cpuset.{f}.effective").read_text().strip()
+                (d / f"cpuset.{f}.effective").write_text(eff + "\n")
+        if "CPUSetPartition" in new:
+            part = new["CPUSetPartition"] or "member"
+            if ("AllowedCPUs" in new and not new["AllowedCPUs"] and not new["CPUSetPartition"]
+                    and old_partition.startswith("isolated")):
+                # probe 3: resetting both leaves the partition invalid instead of member
+                part = self.PARTITION_INVALID
+            (d / "cpuset.cpus.partition").write_text(part + "\n")
+        return ""
+
 
 @pytest.fixture
 def fake_host(tmp_path, monkeypatch):
@@ -188,5 +358,6 @@ def fake_host(tmp_path, monkeypatch):
     host = FakeHost(root, monkeypatch)
     yield host
     reset()
-    from vfio_isolate import cpuset
+    from vfio_isolate import cpuset, systemd
     cpuset.reset_cgroup_cache()
+    systemd.reset_cache()

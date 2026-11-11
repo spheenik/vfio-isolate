@@ -43,3 +43,5 @@ include = ["vfio_isolate*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not vm'"
+markers = ["vm: runs in a virtme-ng guest with systemd as PID 1 (scripts/vm-test)"]

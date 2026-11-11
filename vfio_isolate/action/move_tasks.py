@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import List, Optional
 
 from vfio_isolate.cpuset import CPUSet
 from .action import Action, Execution, PreconditionError
@@ -12,6 +13,7 @@ class MoveTasks(Action):
     class Param:
         cpuset_from: str
         cpuset_to: str
+        pids: Optional[List[int]] = None
 
     @classmethod
     def can_execute(cls, p: Param):
@@ -24,8 +26,17 @@ class MoveTasks(Action):
     def execute(cls, p: Param):
         set_from = CPUSet(p.cpuset_from)
         set_to = CPUSet(p.cpuset_to)
-        set_to.add_all_from_cpuset(set_from)
+        if p.pids is None:
+            set_to.add_all_from_cpuset(set_from)
+            return
+        # only PIDs still in the source; the others exited or were moved elsewhere
+        present = set(set_from.pids())
+        for pid in p.pids:
+            if pid in present:
+                set_to.add_pid(pid, True)
 
     @classmethod
     def record_undo(cls, p):
-        yield Execution(MoveTasks, MoveTasks.Param(cpuset_from=p.cpuset_to, cpuset_to=p.cpuset_from))
+        moved = list(CPUSet(p.cpuset_from).pids())
+        yield Execution(MoveTasks, MoveTasks.Param(
+            cpuset_from=p.cpuset_to, cpuset_to=p.cpuset_from, pids=moved))

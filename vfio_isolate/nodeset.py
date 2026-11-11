@@ -62,12 +62,13 @@ class NodeSetParser:
 class NodeSet:
 
     def __init__(self, initial=None):
+        if isinstance(initial, str):
+            initial = initial.rstrip()
         if not initial:
             self.nodes = set()
         elif isinstance(initial, set):
             self.nodes = initial
         elif isinstance(initial, str):
-            initial = initial.rstrip()
             self.nodes = NodeSetParser.parse(initial)
         else:
             raise Exception("unable to initialize NodeSet")

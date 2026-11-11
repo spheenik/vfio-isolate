@@ -14,6 +14,10 @@ class HostUnsupportedError(Exception):
     pass
 
 
+class PartitionInvalidError(Exception):
+    """The kernel reports the partition as invalid after it was set; args[0] is the reason."""
+
+
 _cgroup_root_cache = None
 
 
@@ -106,16 +110,14 @@ class CPUSet:
             return CPUSet(self.path[:-1])
 
     def create(self, cpus: CPUNodeSet = None, mems: NUMANodeSet = None):
+        """Create the cgroup. Without cpus/mems the files stay empty (inherit from the parent)."""
+        self.ensure_controller_path()
         os.mkdir(self.__path())
         self.on_create()
         if cpus:
             self.set_cpus(cpus)
-        else:
-            self.set_cpus(self.parent().get_cpus())
         if mems:
             self.set_mems(mems)
-        else:
-            self.set_mems(self.parent().get_mems())
 
     def exists(self) -> bool:
         return os.path.isdir(self.__path())
@@ -124,48 +126,86 @@ class CPUSet:
         os.rmdir(self.__path())
 
     def parents(self):
-        n = 0
-        while n < len(self.path):
+        """Yield the ancestors from the root down to this cgroup's parent."""
+        for n in range(len(self.path)):
             yield CPUSet(self.path[0:n])
 
     def on_create(self):
         pass
 
-    def is_controller_enabled(self, controller):
-        with self.open("cgroup.controllers", "r") as f:
-            for c in f:
-                if controller == c:
-                    return True
-        return False
+    def ensure_controller_path(self):
+        """Enable cpuset in subtree_control of every ancestor (root first); never the target's own."""
+        for ancestor in self.parents():
+            with ancestor.open("cgroup.subtree_control", "r") as f:
+                enabled = f.read().split()
+            if "cpuset" not in enabled:
+                with ancestor.open("cgroup.subtree_control", "w") as f:
+                    f.write("+cpuset")
 
-    def enable_controller(self, controller, enable=True):
-        prefix = "+" if enable else "-"
-        with self.open("cgroup.subtree_control", "w") as f:
-            f.write(f"{prefix}{controller}")
-
-    def ensure_cpuset_controller_enabled(self):
-        if not self.is_controller_enabled("cpuset"):
-            self.enable_controller("cpuset")
+    @staticmethod
+    def _value(mask) -> str:
+        # an empty value must be written as "\n": writing "" does not reach the kernel
+        return mask.to_list_form() if mask else "\n"
 
     def get_cpus(self) -> CPUNodeSet:
-        self.ensure_cpuset_controller_enabled()
+        """Effective CPUs."""
         with self.open("cpuset.cpus.effective", "r") as f:
             return CPUNodeSet(f.read())
 
+    def _read_configured(self, name: str) -> str:
+        """Read a configured cpuset file; a missing file (controller not yet enabled on the
+        path) reads as empty. Reading never enables anything."""
+        try:
+            with self.open(name, "r") as f:
+                return f.read()
+        except FileNotFoundError:
+            return "\n"
+
+    def get_configured_cpus(self) -> CPUNodeSet:
+        return CPUNodeSet(self._read_configured("cpuset.cpus"))
+
     def set_cpus(self, mask: CPUNodeSet):
-        self.ensure_cpuset_controller_enabled()
+        self.ensure_controller_path()
         with self.open("cpuset.cpus", "w") as f:
-            f.write(mask.to_list_form())
+            f.write(self._value(mask))
 
     def get_mems(self) -> NUMANodeSet:
-        self.ensure_cpuset_controller_enabled()
+        """Effective memory nodes."""
         with self.open("cpuset.mems.effective", "r") as f:
             return NUMANodeSet(f.read())
 
+    def get_configured_mems(self) -> NUMANodeSet:
+        return NUMANodeSet(self._read_configured("cpuset.mems"))
+
     def set_mems(self, mask: NUMANodeSet):
-        self.ensure_cpuset_controller_enabled()
+        self.ensure_controller_path()
         with self.open("cpuset.mems", "w") as f:
-            f.write(mask.to_list_form())
+            f.write(self._value(mask))
+
+    def get_partition(self):
+        """Return (type, invalid_reason). "isolated invalid (xyz)" -> ("isolated", "xyz");
+        reason is None when the partition is valid. A missing file (controller not yet
+        enabled on the path) reads as "member"."""
+        text = self._read_configured("cpuset.cpus.partition").strip() or "member"
+        m = re.fullmatch(r"(\S+)(\s+invalid(?:\s*\((.*)\))?)?", text, re.S)
+        if not m:
+            return text, None
+        return m.group(1), (m.group(3) or "") if m.group(2) else None
+
+    def set_partition(self, partition: str):
+        """Write the partition type, read it back and raise PartitionInvalidError if invalid."""
+        self.ensure_controller_path()
+        with self.open("cpuset.cpus.partition", "w") as f:
+            f.write(partition)
+        self.verify_partition(partition)
+
+    def verify_partition(self, requested: str):
+        """Raise PartitionInvalidError unless the kernel reports a valid partition of the requested type."""
+        actual, reason = self.get_partition()
+        if reason is not None:
+            raise PartitionInvalidError(reason)
+        if actual != requested:
+            raise PartitionInvalidError(f"kernel reports {actual}, requested {requested}")
 
     def pids(self):
         with self.open("cgroup.procs", "r") as f:

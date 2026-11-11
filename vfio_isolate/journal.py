@@ -36,7 +36,27 @@ def _param_types(cls) -> dict:
     return typing.get_type_hints(cls.Param)
 
 
+def _unwrap_optional(t):
+    """Return X for Optional[X], else None."""
+    if typing.get_origin(t) is typing.Union:
+        args = [a for a in typing.get_args(t) if a is not type(None)]
+        if len(args) == 1 and len(typing.get_args(t)) == 2:
+            return args[0]
+    return None
+
+
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 def _encode_value(value, t, field):
+    inner = _unwrap_optional(t)
+    if inner is not None:
+        return None if value is None else _encode_value(value, inner, field)
+    if t == typing.List[int]:
+        if isinstance(value, list) and all(_is_int(v) for v in value):
+            return list(value)
+        return _bad(field, value)
     if value is None:
         return None
     if t is str:
@@ -60,6 +80,13 @@ def _bad(field, value):
 
 
 def _decode_value(value, t, field):
+    inner = _unwrap_optional(t)
+    if inner is not None:
+        return None if value is None else _decode_value(value, inner, field)
+    if t == typing.List[int]:
+        if isinstance(value, list) and all(_is_int(v) for v in value):
+            return list(value)
+        _bad(field, value)
     if value is None:
         return None
     if t is str:
@@ -113,10 +140,16 @@ def decode(d) -> Execution:
     unknown = set(raw) - set(types)
     if unknown:
         raise JournalError(f"unknown field(s) for action '{name}': {', '.join(sorted(unknown))}")
-    missing = set(types) - set(raw)
+    defaults = {}
+    for f in dataclasses.fields(cls.Param):
+        if f.default is not dataclasses.MISSING:
+            defaults[f.name] = f.default
+        elif f.default_factory is not dataclasses.MISSING:
+            defaults[f.name] = f.default_factory()
+    missing = set(types) - set(raw) - set(defaults)
     if missing:
         raise JournalError(f"missing field(s) for action '{name}': {', '.join(sorted(missing))}")
-    kwargs = {k: _decode_value(raw[k], types[k], k) for k in types}
+    kwargs = {k: _decode_value(raw[k], types[k], k) if k in raw else defaults[k] for k in types}
     return Execution(cls, cls.Param(**kwargs))
 
 

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from vfio_isolate import systemd
 from vfio_isolate.cpuset import CPUSet
 from .action import Action, Execution, PreconditionError
 
@@ -14,6 +15,11 @@ class CPUSetDelete(Action):
 
     @classmethod
     def can_execute(cls, p: Param):
+        from .cpuset_modify import is_root
+        if is_root(p.cpuset_name):
+            raise PreconditionError("the root cgroup cannot be deleted")
+        if systemd.unit_for_cgroup(p.cpuset_name):
+            raise PreconditionError(f"cpuset {p.cpuset_name} is managed by systemd")
         if not CPUSet(p.cpuset_name).exists():
             raise PreconditionError(f"cpuset {p.cpuset_name} does not exist")
         return True
@@ -39,6 +45,7 @@ class CPUSetDelete(Action):
         cpu_set = CPUSet(p.cpuset_name)
         yield Execution(CPUSetModify, CPUSetModify.Param(
             cpuset_name=p.cpuset_name,
-            cpus=cpu_set.get_cpus(),
-            mems=cpu_set.get_mems()
+            cpus=cpu_set.get_configured_cpus(),
+            mems=cpu_set.get_configured_mems(),
+            partition=cpu_set.get_partition()[0]
         ))

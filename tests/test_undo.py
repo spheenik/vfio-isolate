@@ -56,8 +56,8 @@ def test_failure_part_way_through_a_chain(host, j):
     assert len(journal.read_journal(j)) == 2
     assert main(["restore", j]) == 0
     assert gov(host, 0) == "powersave"
-    # the undo captures cpuset.cpus.effective, which is 0-7 in the fake tree
-    assert cpus_of(host, "a") == "0-7"
+    # the undo captures the configured cpuset.cpus (empty = inherit)
+    assert cpus_of(host, "a") == "\n"
 
 
 def test_cpuset_create_fails_after_undo_recorded(host, j, monkeypatch):
@@ -74,7 +74,9 @@ def test_cpuset_create_fails_after_undo_recorded(host, j, monkeypatch):
 
 
 def test_cpuset_delete_fails_after_undo_recorded(host, j, monkeypatch):
-    host.mkcg("a", cpus="2-3", mems="0")
+    cg = host.mkcg("a", cpus="2-3", mems="0")
+    (cg / "cpuset.cpus").write_text("2-3\n")
+    (cg / "cpuset.mems").write_text("0\n")
 
     def boom(self, *a, **k):
         raise OSError("boom")
@@ -100,7 +102,9 @@ def test_precondition_failure_records_nothing(host, j, capsys):
 # ---------------------------------------------------------------- order
 
 def test_undo_of_cpuset_delete(host, j):
-    host.mkcg("a", cpus="2-3", mems="0")
+    cg = host.mkcg("a", cpus="2-3", mems="0")
+    (cg / "cpuset.cpus").write_text("2-3\n")
+    (cg / "cpuset.mems").write_text("0\n")
     assert main(["-u", j, "cpuset-delete", "/a"]) == 0
     assert not (host.root / host.cgroup_mount.lstrip("/") / "a").exists()
     assert main(["restore", j]) == 0
@@ -162,7 +166,7 @@ def test_one_step_fails(host, j, capsys):
     assert main(["restore", j]) == 1
     err = capsys.readouterr().err
     assert "restore: cpuset-modify" in err and "/b" in err
-    assert cpus_of(host, "a") == "0-7"
+    assert cpus_of(host, "a") == "\n"
     steps = step_names(j)
     assert len(steps) == 1 and steps[0][1].cpuset_name == "/b"
 
