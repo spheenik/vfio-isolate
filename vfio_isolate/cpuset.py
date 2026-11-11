@@ -224,8 +224,7 @@ class CPUSet:
                 print_verbose(f"moving PID {pid} to CPUSet {self.name()}")
             with self.open("cgroup.procs", "w") as f:
                 f.write(str(pid))
-            if report:
-                output.failures.ok()
+            output.failures.ok()  # a success on a retry still counts: no false "no task could be moved"
             return True
         except OSError as e:
             try:

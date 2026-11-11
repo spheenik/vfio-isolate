@@ -108,11 +108,17 @@ for the root cgroup `/`. All of these rejections SHALL happen before any change.
 them. When removing the cpuset fails because it is still in use, it SHALL move the
 remaining tasks to the parent again and retry for up to about 2 seconds; if the cpuset is
 still in use after that, the command SHALL fail with a message saying the cpuset is still
-in use.
+in use. A removal that fails because of child cgroups SHALL fail at once, naming them, also
+during `restore`. A task that cannot be moved SHALL be counted once per delete, not once per
+retry.
 
 #### Scenario: Child cgroups
 - **WHEN** `cpuset-delete /a` runs and `/a/b` exists
 - **THEN** the command fails naming `/a/b`, before any task is moved
+
+#### Scenario: Child cgroup created before restore
+- **WHEN** a journal from `-u j cpuset-create /a` is restored after `/a/b` was created
+- **THEN** `restore` fails at once naming `/a/b`, without retrying, and keeps the step in the journal
 
 #### Scenario: Task forked during the move
 - **WHEN** the first removal of `/a` fails with `EBUSY` because a task appeared in it, and the task is moved on the retry
