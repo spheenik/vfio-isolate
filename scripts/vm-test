@@ -63,9 +63,14 @@ fi
 echo "$rc" >"$VM_RES/rc"
 INNER
 
+# The guest boots the host's own systemd configuration; the default target would start
+# every host service (and wait-online/nginx-style units held boot for ~2 min). getty.target
+# is enough to run --exec on the serial console; logind is added so a login session exists
+# and user.slice gets created, as on a real host.
 # the extra args are passed through "$@" of the inner script, so they need no quoting here
 VM_REPO=$repo VM_VENV=$venv VM_RES=$res \
 timeout --kill-after=10 "$TIMEOUT" vng --run --systemd --user root --cpus 8 \
+    --append systemd.unit=getty.target --append systemd.wants=systemd-logind.service \
     --rodir="$venv=$venv" --rwdir="$res=$res" \
     --exec "VM_REPO=$(printf %q "$repo") VM_VENV=$(printf %q "$venv") VM_RES=$(printf %q "$res") sh $(printf %q "$res/inner.sh") $(for a in "$@"; do printf '%q ' "$a"; done)" \
     >"$res/vng.log" 2>&1

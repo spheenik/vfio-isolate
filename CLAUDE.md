@@ -56,7 +56,7 @@ dropped in 0.6; v1 users stay on 0.5.2.
 - Fake systemd: `sd` fixture in `tests/conftest.py` (fake `_run`, unit table mirrored into the
   fake cgroup tree, records `set_calls`); proves only files written and systemctl arguments.
 - VM suite `tests/vm` (marker `vm`, excluded by default, skips unless root + PID 1 systemd):
-  `scripts/vm-test --venv <venv>` (virtme-ng, `/dev/kvm`, 2-3 min). Never run it as root on the host.
+  `scripts/vm-test --venv <venv>` (virtme-ng, `/dev/kvm`, ~10 s; guest boots `getty.target` only). Never run it as root on the host.
 - Release: bump `version` in `pyproject.toml`, commit as `V x.y.z: <summary>`, build
   sdist into `dist/`, upload to PyPI.
 - README documents every command and the example scripts; keep it in sync.
