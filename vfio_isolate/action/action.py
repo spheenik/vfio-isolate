@@ -9,6 +9,8 @@ class Execution:
 
 
 class Action:
+    needs_cgroup = False
+
     @classmethod
     def can_execute(cls, p):
         return True

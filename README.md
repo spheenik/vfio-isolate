@@ -30,29 +30,12 @@ Commands:
 
 #### Usage
 
+vfio-isolate 0.6 and newer requires cgroup v2 (the unified hierarchy) with the `cpuset` controller available.
+If your system still uses cgroup v1, stay on 0.5.2: `pip install vfio-isolate==0.5.2`.
+
 To "partion" your CPU between the host and your VM, a mechanism of the Linx kernel, named "cgroups" is used.
-There exist 2 versions of cgroup, v1 and v2. Some options are only available for cgroups v1.
-
-To find out what version your system is using use the following command
-
-```
-mount | grep cgroup
-```
-
-it will show type cgroup for v1, and cgroup2 vor v2.
 
 CPU sets are part of cgroups, and define the subset of cores processes in a cgroup are allowed to be scheduled on.
-
-For cgroups v1, they also have some other properties:
-
-| Feature | Description |
-| --- | --- |
-|cpu-exclusivity| prevents other sibling cpusets to use the cpus of this cpuset|
-|mem-exclusivity| prevents other sibling cpusets to use the memory (NUMA) of this cpuset|
-|mem-migration| only effective on NUMA systems: when enabled, processes in this cpuset will have their memory migrated to the node they are running on |
-|scheduler-load-balance | when enabled, the scheduler will try to load balance processes within the available cpus |
-
-For more information, see the kernel documentation at https://www.kernel.org/doc/Documentation/cgroup-v1/cpusets.txt
 
 #### Non NUMA example (cgroups v2)
 
@@ -116,64 +99,6 @@ To pin the VM cores, use libvirt:
   </cputune>
 ```
 
-#### Non NUMA example (cgroups v1)
-
-In this example, we have a 6 core, 12 thread CPU from Intel, and we want to leave the first 2 cores for host, IO and
-emulation work, while giving the remaining 4 cores to the VM.
-
-The command to use would be this:
-
-```
- # vfio-isolate \ 
-    cpuset-create --cpus C0-1,6-7 /host.slice \
-    move-tasks / /host.slice
-```
-
-This will move all the processes from the root cgroup to your newly created host.slice, and assigns only the first two 
-physical cores for execution.
-
-To now make your VM use the now remaining idle cores, you can use libvirt:
-```
-<vcpu placement='static'>8</vcpu>
-  <vcpupin vcpu="0" cpuset="2"/>
-  <vcpupin vcpu="1" cpuset="8"/>
-  <vcpupin vcpu="2" cpuset="3"/>
-  <vcpupin vcpu="3" cpuset="9"/>
-  <vcpupin vcpu="4" cpuset="4"/>
-  <vcpupin vcpu="5" cpuset="10"/>
-  <vcpupin vcpu="6" cpuset="5"/>
-  <vcpupin vcpu="7" cpuset="11"/>
-  <emulatorpin cpuset="0-1,6-7"/>
-  <iothreadpin iothread="1" cpuset="0-1,6-7"/>
-</cputune>
-```
-
-To manually undo the previous command:
-
-```
- sudo vfio-isolate \ 
-    cpuset-delete /host.slice
-```
-
-Or you could use the undo feature built into vfio-isolate (see below).
-
-All processes in a cpuset will be moved to its parent cpuset upon deletion.
-
-#### NUMA example (cgroups v1)
-
-If you have a system with more than one NUMA nodes, you might want to isolate according to the different nodes.
-For example, on an AMD Threadripper 1920X (12 core, 24 thread), which has 2 NUMA nodes, you could do the following
-
-```
- # vfio-isolate \ 
-    cpuset-create --cpus N0 --mems N0 -mm /host.slice \
-    move-tasks / /host.slice
-```
-
-This will configure NUMA Node 0, in this case CPU 0-5,12-17 for the host, while configuring NUMA node 1 for 
-the VM (6-11,18-23). The `-mm` parameter enables memory migration, so that processes moving into either the host or
-the VM cpuset will have their memory migrated to the right node.
-
 #### Undo
 
 vfio-isolate is able to record all the changes that it did and storing a recipe to undo them into a file, to be executed
@@ -191,6 +116,15 @@ This will create the `test.slice` cpuset, and also a file `/tmp/undo_description
 ```
 
 will remove `test.slice`. This works with all the subcommands that vfio-isolate supports. 
+
+#### Deleting a cpuset
+
+```
+ # vfio-isolate cpuset-delete /test.slice
+```
+
+All processes in the cpuset are moved to its parent cpuset, then the cpuset is removed. With `-u`, the undo file
+recreates the cpuset and restores its cpus and mems (the processes are not moved back).
 
 #### IRQ affinity
 

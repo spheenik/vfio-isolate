@@ -45,7 +45,10 @@ build on.
   side effect), `vfio_isolate/cli.py` (options removed),
   `vfio_isolate/action/cpuset_create.py`, `cpuset_modify.py`, `cpuset_delete.py`
   (flag params and undo of those flags removed).
-- Undo files written by 0.5.x contain the removed flag fields and will not restore
-  under 0.6. The undo format is replaced in the later `undo-journal` change anyway.
+- Undo files written by 0.5.x still unpickle under 0.6 (pickle restores the instance
+  `__dict__`, extra fields included), and restore applies cpus/mems. The removed flag
+  fields are silently ignored, so exclusivity/migrate/load-balance settings recorded in
+  an old file are not restored. Verified by experiment for `CPUSetModify`. The undo
+  format is replaced in the later `undo-journal` change anyway.
 - Packaging: `setup.py` → `pyproject.toml`. New dev dependency: pytest.
 - Users still on cgroup v1 have to stay on 0.5.2.

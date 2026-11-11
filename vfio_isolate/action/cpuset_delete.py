@@ -5,6 +5,8 @@ from .action import Action, Execution
 
 
 class CPUSetDelete(Action):
+    needs_cgroup = True
+
     @dataclass
     class Param:
         cpuset_name: str
@@ -28,9 +30,5 @@ class CPUSetDelete(Action):
         yield Execution(CPUSetModify, CPUSetModify.Param(
             cpuset_name=p.cpuset_name,
             cpus=cpu_set.get_cpus(),
-            mems=cpu_set.get_mems(),
-            cpu_exclusive=cpu_set.get_cpu_exclusive(),
-            mem_exclusive=cpu_set.get_mem_exclusive(),
-            mem_migrate=cpu_set.get_mem_migrate(),
-            sched_load_balance=cpu_set.get_sched_load_balance()
+            mems=cpu_set.get_mems()
         ))

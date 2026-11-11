@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from .action import Action
+from .. import fsroot
 
 
 class CompactMemory(Action):
@@ -10,5 +11,5 @@ class CompactMemory(Action):
 
     @classmethod
     def execute(cls, p: Param):
-        with open("/proc/sys/vm/compact_memory", "w") as f:
+        with open(fsroot.path("/proc/sys/vm/compact_memory"), "w") as f:
             f.write("1")

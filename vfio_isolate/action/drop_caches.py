@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from .action import Action
+from .. import fsroot
 
 
 class DropCaches(Action):
@@ -10,5 +11,5 @@ class DropCaches(Action):
 
     @classmethod
     def execute(cls, p: Param):
-        with open("/proc/sys/vm/drop_caches", "w") as f:
+        with open(fsroot.path("/proc/sys/vm/drop_caches"), "w") as f:
             f.write("3")

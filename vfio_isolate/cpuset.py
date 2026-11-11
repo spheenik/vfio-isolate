@@ -1,17 +1,77 @@
 import os
-from abc import abstractmethod
+import re
 
 import psutil
 
+from vfio_isolate import fsroot
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 from vfio_isolate.output import *
 
+_HINT = "cgroup v1 users need vfio-isolate 0.5.x"
+
+
+class HostUnsupportedError(Exception):
+    pass
+
+
+_cgroup_root_cache = None
+
+
+def reset_cgroup_cache():
+    global _cgroup_root_cache
+    _cgroup_root_cache = None
+
+
+def _decode_mount_field(s: str) -> str:
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
+def cgroup_root() -> str:
+    """Return the (fsroot-resolved) path of the cgroup v2 mount with the cpuset controller.
+
+    Raises HostUnsupportedError if the host does not qualify. Only successes are cached.
+    """
+    global _cgroup_root_cache
+    if _cgroup_root_cache is not None:
+        return _cgroup_root_cache
+
+    v2_mounts = []
+    try:
+        with open(fsroot.path("proc/self/mounts"), "r") as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        raise HostUnsupportedError(f"cannot read mount table ({e}); {_HINT}")
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        mountpoint = _decode_mount_field(fields[1])
+        fstype = fields[2]
+        options = fields[3].split(",")
+        if fstype == "cgroup" and "cpuset" in options:
+            raise HostUnsupportedError(
+                f"the cpuset controller is bound to a cgroup v1 hierarchy ({mountpoint}); {_HINT}")
+        if fstype == "cgroup2":
+            v2_mounts.append(mountpoint)
+
+    if not v2_mounts:
+        raise HostUnsupportedError(f"cgroup v2 not found; {_HINT}")
+    mountpoint = "/sys/fs/cgroup" if "/sys/fs/cgroup" in v2_mounts else v2_mounts[0]
+    root = fsroot.path(mountpoint)
+
+    try:
+        with open(root + "/cgroup.controllers", "r") as f:
+            controllers = f.read().split()
+    except OSError as e:
+        raise HostUnsupportedError(f"cannot read cgroup.controllers in {mountpoint} ({e}); {_HINT}")
+    if "cpuset" not in controllers:
+        raise HostUnsupportedError(f"cpuset controller not available in cgroup v2 at {mountpoint}; {_HINT}")
+
+    _cgroup_root_cache = root
+    return root
+
 
 class CPUSet:
-
-    # these are assigned below
-    mountpoint = None
-    impl = None
 
     def __init__(self, name=None):
         if not name:
@@ -27,7 +87,7 @@ class CPUSet:
         return f"{self.__class__} {self.name()}"
 
     def __path(self, path: str = None):
-        elements = [CPUSet.mountpoint]
+        elements = [cgroup_root()]
         elements.extend(self.path)
         if path:
             elements.append(path)
@@ -47,7 +107,7 @@ class CPUSet:
 
     def create(self, cpus: CPUNodeSet = None, mems: NUMANodeSet = None):
         os.mkdir(self.__path())
-        self.impl.on_create(self)
+        self.on_create()
         if cpus:
             self.set_cpus(cpus)
         else:
@@ -65,50 +125,56 @@ class CPUSet:
         while n < len(self.path):
             yield CPUSet(self.path[0:n])
 
+    def on_create(self):
+        pass
+
+    def is_controller_enabled(self, controller):
+        with self.open("cgroup.controllers", "r") as f:
+            for c in f:
+                if controller == c:
+                    return True
+        return False
+
+    def enable_controller(self, controller, enable=True):
+        prefix = "+" if enable else "-"
+        with self.open("cgroup.subtree_control", "w") as f:
+            f.write(f"{prefix}{controller}")
+
+    def ensure_cpuset_controller_enabled(self):
+        if not self.is_controller_enabled("cpuset"):
+            self.enable_controller("cpuset")
+
     def get_cpus(self) -> CPUNodeSet:
-        return self.impl.get_cpus(self)
+        self.ensure_cpuset_controller_enabled()
+        with self.open("cpuset.cpus.effective", "r") as f:
+            return CPUNodeSet(f.read())
 
     def set_cpus(self, mask: CPUNodeSet):
-        self.impl.set_cpus(self, mask)
+        self.ensure_cpuset_controller_enabled()
+        with self.open("cpuset.cpus", "w") as f:
+            f.write(mask.to_list_form())
 
     def get_mems(self) -> NUMANodeSet:
-        return self.impl.get_mems(self)
+        self.ensure_cpuset_controller_enabled()
+        with self.open("cpuset.mems.effective", "r") as f:
+            return NUMANodeSet(f.read())
 
     def set_mems(self, mask: NUMANodeSet):
-        self.impl.set_mems(self, mask)
-
-    def get_cpu_exclusive(self):
-        return self.impl.get_cpu_exclusive(self)
-
-    def set_cpu_exclusive(self, value):
-        self.impl.set_cpu_exclusive(self, value)
-
-    def get_mem_exclusive(self):
-        return self.impl.get_mem_exclusive(self)
-
-    def set_mem_exclusive(self, value):
-        self.impl.set_mem_exclusive(self, value)
-
-    def get_mem_migrate(self):
-        return self.impl.get_mem_migrate(self)
-
-    def set_mem_migrate(self, value):
-        self.impl.set_mem_migrate(self, value)
-
-    def get_sched_load_balance(self):
-        return self.impl.get_sched_load_balance(self)
-
-    def set_sched_load_balance(self, value):
-        self.impl.set_sched_load_balance(self, value)
+        self.ensure_cpuset_controller_enabled()
+        with self.open("cpuset.mems", "w") as f:
+            f.write(mask.to_list_form())
 
     def pids(self):
-        return self.impl.pids(self)
+        with self.open("cgroup.procs", "r") as f:
+            for pid in f:
+                yield int(pid.strip())
 
     def add_pid(self, pid: int, silent=False):
         try:
             if not silent:
                 print_verbose(f"moving PID {pid} to CPUSet {self.name()}")
-            self.impl.add_pid(self, pid)
+            with self.open("cgroup.procs", "w") as f:
+                f.write(str(pid))
             return True
         except OSError:
             try:
@@ -122,191 +188,3 @@ class CPUSet:
         print_verbose(f"moving all processes from CPUSet {other.name()} to CPUSet {self.name()}")
         for pid in other.pids():
             self.add_pid(pid, True)
-
-
-class CGroupV1:
-
-    @staticmethod
-    def on_create(cpuset: CPUSet):
-        pass
-
-    @staticmethod
-    def get_cpus(cpuset: CPUSet) -> CPUNodeSet:
-        with cpuset.open("cpuset.cpus", "r") as f:
-            return CPUNodeSet(f.read())
-
-    @staticmethod
-    def set_cpus(cpuset: CPUSet, mask: CPUNodeSet):
-        with cpuset.open("cpuset.cpus", "w") as f:
-            f.write(mask.to_list_form())
-
-    @staticmethod
-    def get_mems(cpuset: CPUSet) -> NUMANodeSet:
-        with cpuset.open("cpuset.mems", "r") as f:
-            return NUMANodeSet(f.read())
-
-    @staticmethod
-    def set_mems(cpuset: CPUSet, mask: NUMANodeSet):
-        with cpuset.open("cpuset.mems", "w") as f:
-            f.write(mask.to_list_form())
-
-    @staticmethod
-    def get_cpu_exclusive(cpuset: CPUSet):
-        with cpuset.open("cpuset.cpu_exclusive", "r") as f:
-            return f.read() != "0"
-
-    @staticmethod
-    def set_cpu_exclusive(cpuset: CPUSet, value):
-        with cpuset.open("cpuset.cpu_exclusive", "w") as f:
-            f.write("1" if value else "0")
-
-    @staticmethod
-    def get_mem_exclusive(cpuset: CPUSet):
-        with cpuset.open("cpuset.mem_exclusive", "r") as f:
-            return f.read() != "0"
-
-    @staticmethod
-    def set_mem_exclusive(cpuset: CPUSet, value):
-        with cpuset.open("cpuset.mem_exclusive", "w") as f:
-            f.write("1" if value else "0")
-
-    @staticmethod
-    def get_mem_migrate(cpuset: CPUSet):
-        with cpuset.open("cpuset.memory_migrate", "r") as f:
-            return f.read() != "0"
-
-    @staticmethod
-    def set_mem_migrate(cpuset: CPUSet, value):
-        with cpuset.open("cpuset.memory_migrate", "w") as f:
-            f.write("1" if value else "0")
-
-    @staticmethod
-    def get_sched_load_balance(cpuset: CPUSet):
-        with cpuset.open("cpuset.sched_load_balance", "r") as f:
-            return f.read() != "0"
-
-    @staticmethod
-    def set_sched_load_balance(cpuset: CPUSet, value):
-        with cpuset.open("cpuset.sched_load_balance", "w") as f:
-            f.write("1" if value else "0")
-
-    @staticmethod
-    def pids(cpuset: CPUSet):
-        with cpuset.open("tasks", "r") as f:
-            for pid in f:
-                yield int(pid.strip())
-
-    @staticmethod
-    def add_pid(cpuset: CPUSet, pid: int):
-        with cpuset.open("tasks", "w") as f:
-            f.write(str(pid))
-
-
-class CGroupV2:
-
-    @staticmethod
-    def on_create(cpuset: CPUSet):
-        pass
-
-    @staticmethod
-    def is_controller_enabled(cpuset: CPUSet, controller):
-        with cpuset.open("cgroup.controllers", "r") as f:
-            for c in f:
-                if controller == c:
-                    return True
-        return False
-
-    @staticmethod
-    def enable_controller(cpuset: CPUSet, controller, enable=True):
-        prefix = "+" if enable else "-"
-        with cpuset.open("cgroup.subtree_control", "w") as f:
-            f.write(f"{prefix}{controller}")
-
-    @staticmethod
-    def ensure_cpuset_controller_enabled(cpuset: CPUSet):
-        if not CGroupV2.is_controller_enabled(cpuset, "cpuset"):
-            CGroupV2.enable_controller(cpuset, "cpuset")
-
-    @staticmethod
-    def get_cpus(cpuset: CPUSet) -> CPUNodeSet:
-        CGroupV2.ensure_cpuset_controller_enabled(cpuset)
-        with cpuset.open("cpuset.cpus.effective", "r") as f:
-            return CPUNodeSet(f.read())
-
-    @staticmethod
-    def set_cpus(cpuset: CPUSet, mask: CPUNodeSet):
-        CGroupV2.ensure_cpuset_controller_enabled(cpuset)
-        with cpuset.open("cpuset.cpus", "w") as f:
-            f.write(mask.to_list_form())
-
-    @staticmethod
-    def get_mems(cpuset: CPUSet) -> NUMANodeSet:
-        CGroupV2.ensure_cpuset_controller_enabled(cpuset)
-        with cpuset.open("cpuset.mems.effective", "r") as f:
-            return NUMANodeSet(f.read())
-
-    @staticmethod
-    def set_mems(cpuset: CPUSet, mask: NUMANodeSet):
-        CGroupV2.ensure_cpuset_controller_enabled(cpuset)
-        with cpuset.open("cpuset.mems", "w") as f:
-            f.write(mask.to_list_form())
-
-    @staticmethod
-    def get_cpu_exclusive(cpuset: CPUSet):
-        return False
-
-    @staticmethod
-    def set_cpu_exclusive(cpuset: CPUSet, value):
-        pass
-
-    @staticmethod
-    def get_mem_exclusive(cpuset: CPUSet):
-        return False
-
-    @staticmethod
-    def set_mem_exclusive(cpuset: CPUSet, value):
-        pass
-
-    @staticmethod
-    def get_mem_migrate(cpuset: CPUSet):
-        return False
-
-    @staticmethod
-    def set_mem_migrate(cpuset: CPUSet, value):
-        pass
-
-    @staticmethod
-    def get_sched_load_balance(cpuset: CPUSet):
-        return False
-
-    @staticmethod
-    def set_sched_load_balance(cpuset: CPUSet, value):
-        pass
-
-    @staticmethod
-    def pids(cpuset: CPUSet):
-        with cpuset.open("cgroup.procs", "r") as f:
-            for pid in f:
-                yield int(pid.strip())
-
-    @staticmethod
-    def add_pid(cpuset: CPUSet, pid: int):
-        with cpuset.open("cgroup.procs", "w") as f:
-            f.write(str(pid))
-
-
-# SETUP
-def setup():
-    for part in psutil.disk_partitions(True):
-        fstype = part.fstype
-        if fstype.startswith("cgroup"):
-            CPUSet.mountpoint = part.mountpoint
-            if fstype.endswith("2"):
-                CPUSet.impl = CGroupV2
-            else:
-                CPUSet.impl = CGroupV1
-            return
-    raise RuntimeError("cgroups not found")
-
-
-setup()

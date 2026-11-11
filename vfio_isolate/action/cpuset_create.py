@@ -5,6 +5,8 @@ from .action import Action, Execution
 
 
 class CPUSetCreate(Action):
+    needs_cgroup = True
+
     @dataclass
     class Param:
         cpuset_name: str

@@ -115,8 +115,10 @@ Kernel semantics stay untested until the VM suite exists.
 
 ## Risks / Trade-offs
 
-- [Undo files from 0.5.x no longer unpickle: the Param fields are gone] → Accepted.
-  The undo format is replaced in `undo-journal` anyway. Say so in the release notes.
+- [Undo files from 0.5.x carry the removed Param fields] → They still unpickle (pickle
+  restores `__dict__`) and `execute` ignores the extra fields, so cpus/mems are
+  restored but the removed flags are not. Accepted. The undo format is replaced in
+  `undo-journal` anyway. Say so in the release notes.
 - [Fake-tree tests can pass while the real kernel rejects a write] → Known gap,
   covered later by the VM suite. Keep the fixtures minimal so they don't encode wrong
   kernel behaviour.

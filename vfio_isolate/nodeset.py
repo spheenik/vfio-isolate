@@ -1,8 +1,10 @@
 import os
 
+from vfio_isolate import fsroot
 from vfio_isolate.nodeset_parser import Transformer, Lark_StandAlone
 
-_base_path = "/sys/devices/system"
+def _base_path():
+    return fsroot.path("/sys/devices/system")
 
 def cache(func):
     def wrapper():
@@ -113,18 +115,18 @@ class CPUNodeSet(NodeSet):
 
     @staticmethod
     def __cpu_path(node, path=""):
-        return f"/sys/devices/system/cpu/cpu{node}{path}"
+        return fsroot.path(f"/sys/devices/system/cpu/cpu{node}{path}")
 
     @staticmethod
     @cache
     def present_cpus():
-        with open(f"{_base_path}/cpu/present") as f:
+        with open(f"{_base_path()}/cpu/present") as f:
             return CPUNodeSet(f.read())
 
     @staticmethod
     @cache
     def possible_cpus():
-        with open(f"{_base_path}/cpu/possible") as f:
+        with open(f"{_base_path()}/cpu/possible") as f:
             return CPUNodeSet(f.read())
 
     def is_valid(self):
@@ -138,18 +140,18 @@ class NUMANodeSet(NodeSet):
 
     @staticmethod
     def __node_path(node, path=""):
-        return f"/sys/devices/system/node/node{node}{path}"
+        return fsroot.path(f"/sys/devices/system/node/node{node}{path}")
 
     @staticmethod
     @cache
     def online_nodes():
-        with open(f"{_base_path}/node/online") as f:
+        with open(f"{_base_path()}/node/online") as f:
             return NUMANodeSet(f.read())
 
     @staticmethod
     @cache
     def possible_nodes():
-        with open(f"{_base_path}/node/possible") as f:
+        with open(f"{_base_path()}/node/possible") as f:
             return NUMANodeSet(f.read())
 
     def is_valid(self):

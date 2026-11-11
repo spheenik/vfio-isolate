@@ -5,7 +5,9 @@ from dataclasses import is_dataclass
 import click
 
 from vfio_isolate.action import *
+from vfio_isolate import cpuset
 from vfio_isolate.cpu import CPU
+from vfio_isolate.cpuset import HostUnsupportedError
 from vfio_isolate.irq import IRQS
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 from vfio_isolate.serialize import *
@@ -89,11 +91,6 @@ def compact_memory(executor, **args):
               callback=cb_cpu_nodeset)
 @click.option("--mems", metavar="<numanodeset>", help="Set the NUMA memory nodes used by the cpuset",
               callback=cb_numa_nodeset)
-@click.option("--cpu-exclusive/--no-cpu-exclusive", "-ce/-nce", help="Set CPU exclusive (cgroup v1 only)", default=None)
-@click.option("--mem-exclusive/--no-mem-exclusive", "-me/-nme", help="Set MEM exclusive (cgroup v1 only)", default=None)
-@click.option("--mem-migrate/--no-mem-migrate", "-mm/-nmm", help="Enable memory migration (cgroup v1 only)", default=None)
-@click.option("--sched-load-balance/--no-sched-load-balance", "-lb/-nlb", help="Enable scheduler load balancing (cgroup v1 only)",
-              default=None)
 @click.pass_obj
 def cpuset_create(executor, **args):
     """create a cpuset"""
@@ -107,11 +104,6 @@ def cpuset_create(executor, **args):
               callback=cb_cpu_nodeset)
 @click.option("--mems", metavar="<numanodeset>", help="Set the NUMA memory nodes used by the cpuset",
               callback=cb_numa_nodeset)
-@click.option("--cpu-exclusive/--no-cpu-exclusive", "-ce/-nce", help="Set CPU exclusive (cgroup v1 only)", default=None)
-@click.option("--mem-exclusive/--no-mem-exclusive", "-me/-nme", help="Set MEM exclusive (cgroup v1 only)", default=None)
-@click.option("--mem-migrate/--no-mem-migrate", "-mm/-nmm", help="Enable memory migration (cgroup v1 only)", default=None)
-@click.option("--sched-load-balance/--no-sched-load-balance", "-lb/-nlb", help="Enable scheduler load balancing (cgroup v1 only)",
-              default=None)
 @click.pass_obj
 def cpuset_modfify(executor, **args):
     """modify a cpuset"""
@@ -174,32 +166,54 @@ def restore(executor, undo_file):
         executor.add(e.action, e.params)
 
 
-def run_cli():
-    class Executor:
-        def __init__(self):
-            self.executions = []
-            self.undo = []
-            self.undo_file = None
+class Executor:
+    def __init__(self):
+        self.executions = []
+        self.undo = []
+        self.undo_file = None
 
-        def add(self, action_class, params):
-            if not is_dataclass(params):
-                params = unserialize(action_class.Param, params)
-            self.executions.append(Execution(action=action_class, params=params))
+    def add(self, action_class, params):
+        if not is_dataclass(params):
+            params = unserialize(action_class.Param, params)
+        self.executions.append(Execution(action=action_class, params=params))
 
-        def run(self):
-            for e in self.executions:
-                for undo in e.action.record_undo(e.params):
-                    self.undo.append(undo)
-                e.action.execute(e.params)
-            if self.undo_file:
-                with open(self.undo_file, "wb") as f:
-                    pickle.dump(self.undo[::-1], f)
+    def run(self):
+        # fail before touching anything (record_undo reads cgroup files too)
+        if any(e.action.needs_cgroup for e in self.executions):
+            cpuset.cgroup_root()
+        for e in self.executions:
+            for undo in e.action.record_undo(e.params):
+                self.undo.append(undo)
+            e.action.execute(e.params)
+        if self.undo_file:
+            with open(self.undo_file, "wb") as f:
+                pickle.dump(self.undo[::-1], f)
 
+
+def main(argv=None) -> int:
     executor = Executor()
-    cli(standalone_mode=False, obj=executor)
-    executor.run()
+    try:
+        rv = cli.main(args=argv, prog_name="vfio-isolate", standalone_mode=False, obj=executor)
+        if isinstance(rv, int):
+            return rv
+    except click.exceptions.Exit as e:
+        return e.exit_code
+    except click.exceptions.Abort:
+        return 1
+    except click.ClickException as e:
+        e.show()
+        return e.exit_code
+    try:
+        executor.run()
+    except HostUnsupportedError as e:
+        print(f"vfio-isolate: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_cli():
+    sys.exit(main())
 
 
 if __name__ == '__main__':
-    sys.argv[0] = "vfio-isolate"
     run_cli()

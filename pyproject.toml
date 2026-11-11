@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vfio-isolate"
+version = "0.6.0.dev0"
+description = "Commandline tool to facilitate CPU core isolation"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Martin Schrodt (spheenik)", email = "martin@schrodt.org" }]
+keywords = ["vfio", "cpu", "isolation"]
+requires-python = ">=3.9"
+dependencies = [
+    "click>=7.1.2",
+    "psutil>=5.7.0",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: System Administrators",
+    "Topic :: System :: Systems Administration",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+[project.urls]
+Homepage = "https://github.com/spheenik/vfio-isolate"
+
+[project.optional-dependencies]
+dev = ["lark>=1.1.5"]
+test = ["pytest>=7"]
+
+[project.scripts]
+vfio-isolate = "vfio_isolate:run_cli"
+
+[tool.setuptools.packages.find]
+include = ["vfio_isolate*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

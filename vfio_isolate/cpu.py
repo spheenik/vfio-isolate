@@ -2,12 +2,15 @@ import os
 import re
 from typing import Generator
 
+from vfio_isolate import fsroot
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 from vfio_isolate.output import print_debug
 
 
 class CPU:
-    base_path = "/sys/devices/system/cpu"
+    @staticmethod
+    def base_path() -> str:
+        return fsroot.path("/sys/devices/system/cpu")
 
     def __init__(self, number: int):
         self.number = number
@@ -16,7 +19,7 @@ class CPU:
         return f"CPU {self.number}"
 
     def __path(self, path: str = None):
-        elements = [CPU.base_path, f"cpu{self.number}"]
+        elements = [CPU.base_path(), f"cpu{self.number}"]
         if path:
             elements.append(path)
         return "/".join(elements)
@@ -40,7 +43,7 @@ class CPUS:
 
     @classmethod
     def online(cls) -> Generator[CPU, None, None]:
-        for file in os.listdir(CPU.base_path):
+        for file in os.listdir(CPU.base_path()):
             m = CPUS.cpudir.match(file)
             if m is not None:
                 yield CPU(int(m.group(1)))

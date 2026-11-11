@@ -5,6 +5,8 @@ from .action import Action, Execution
 
 
 class MoveTasks(Action):
+    needs_cgroup = True
+
     @dataclass
     class Param:
         cpuset_from: str
