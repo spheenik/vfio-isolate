@@ -4,7 +4,6 @@
 Defines what the user documentation must cover and how it is kept correct: README and
 `--help` describe every command, argument form and exit status, README examples are
 checked by the test suite, and breaking changes are recorded in CHANGELOG.md.
-
 ## Requirements
 ### Requirement: README examples are valid invocations
 Every `vfio-isolate` invocation in a README shell block, after joining `\` continuations
@@ -53,4 +52,14 @@ appending to an existing file, root required.
 #### Scenario: Upgrading user
 - **WHEN** a 0.5.x user reads the 0.6.0 entry
 - **THEN** it tells them each breaking change and what to do instead
+
+### Requirement: README explains how to choose CPUs
+The README SHALL explain, independent of CPU model, how to find SMT siblings, cache
+(L3) domains, hybrid core types and NUMA nodes from sysfs, and how to split CPUs between
+host and VM based on them. Advice for hardware the project has not tested SHALL be marked
+as untested. The README SHALL NOT refer users to issue threads for setup instructions.
+
+#### Scenario: X3D user
+- **WHEN** a user with a CPU whose CCDs have different L3 sizes reads the section
+- **THEN** it tells them how to see which CPUs share which L3 and its size, without naming a CPU model as tested
 
