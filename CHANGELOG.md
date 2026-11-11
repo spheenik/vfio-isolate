@@ -34,6 +34,9 @@
 
 ### New
 
+- `hugepages [--node N<n>] PAGESIZE AMOUNT` adds pages to the hugepage pool (#2, #10); undo releases them again. If
+  the kernel provides fewer pages than asked, the command fails, releases what it got and leaves no undo record.
+- Runs are serialized by a lock (`/run/vfio-isolate.lock`), so concurrent hooks do not interleave.
 - cpusets of systemd units (`*.slice`, `*.scope`, `*.service`) are changed with `systemctl set-property --runtime`,
   so the setting survives `systemctl daemon-reload`. `cpuset-create` and `cpuset-delete` are refused for systemd units
   and `/`; `cpuset-modify` is refused for `/`.

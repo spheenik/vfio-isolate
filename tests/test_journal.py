@@ -6,7 +6,7 @@ import pytest
 from vfio_isolate import journal
 from vfio_isolate.action import (ACTIONS, Execution, CompactMemory, CPUGovernor, CPUSetCreate,
                                  CPUSetDelete, CPUSetModify, DropCaches, IRQAffinity,
-                                 IRQAffinityOperation, MoveTasks)
+                                 IRQAffinityOperation, MoveTasks, HugePages)
 from vfio_isolate.cpu import CPU
 from vfio_isolate.irq import IRQ
 from vfio_isolate.journal import JournalError, encode, decode
@@ -30,12 +30,14 @@ def all_executions():
                                                  cpus=CPUNodeSet("0-1"))),
         Execution(IRQAffinity, IRQAffinity.Param(irq=IRQ(12), operation=IRQAffinityOperation.add,
                                                  cpus=CPUNodeSet(""))),
+        Execution(HugePages, HugePages.Param(size_kb=2048, node=None, count=8, release=False)),
+        Execution(HugePages, HugePages.Param(size_kb=1048576, node=0, count=2, release=True)),
     ]
 
 
 def test_registry_names():
     assert set(ACTIONS) == {"cpuset-create", "cpuset-modify", "cpuset-delete", "move-tasks",
-                            "irq-affinity", "cpu-governor", "drop-caches", "compact-memory"}
+                            "irq-affinity", "cpu-governor", "drop-caches", "compact-memory", "hugepages"}
     for name, cls in ACTIONS.items():
         assert cls.name == name
 

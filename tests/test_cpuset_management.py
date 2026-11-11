@@ -80,6 +80,8 @@ def snapshot(root):
     snap = {}
     for dp, _, fns in os.walk(root):
         for fn in fns:
+            if fn == "vfio-isolate.lock":
+                continue
             p = os.path.join(dp, fn)
             with open(p) as f:
                 snap[p] = (f.read(), os.stat(p).st_mtime_ns)

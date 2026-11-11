@@ -238,6 +238,42 @@ sudo vfio-isolate -u /run/vfio-isolate.undo cpuset-modify --cpus C0-6,16-22 /sys
 Drops the page cache, dentries and inodes (writes `3` to `/proc/sys/vm/drop_caches`). Takes no arguments. Nothing to
 undo.
 
+### hugepages
+
+`vfio-isolate hugepages [--node N<n>] PAGESIZE AMOUNT`
+
+Adds `AMOUNT` of memory in pages of `PAGESIZE` to the hugepage pool (`nr_hugepages`); the amount is relative to the
+current pool size, not a target. Undo releases the same number of pages again, never below zero, whatever else changed the pool meanwhile, so
+overlapping VMs that each add and release their own pages are fine. Pages that are still in use are kept by the kernel
+until their user exits, so a `restore` while the VM still runs does not break it; they return to the free pool when the
+VM is gone.
+
+- `PAGESIZE`: page size as `2M`, `1G` or `2048k`. It must match the page size of the VM (libvirt:
+  `<page size=...>` in `<memoryBacking>`). Sizes the kernel does not offer are usage errors.
+- `AMOUNT`: memory to add, as `16G`, `512M` and so on; it must be an exact multiple of the page size
+  (`hugepages 2M 16G` adds 8192 pages).
+- `--node N<n>`: add the pages on one NUMA node instead of system-wide, for example `N0`. Exactly one node, and it
+  must have a pool of that size.
+- If the kernel provides fewer pages than asked, the command fails with `got 6G of 16G in 1G pages`, releases what it
+  got and leaves no undo record, so a `restore` of the same undo file afterwards is safe.
+- Runs of vfio-isolate are serialized by a lock (`/run/vfio-isolate.lock`), so two hooks starting at the same time
+  do not race on the pool.
+- To use the pages, QEMU needs hugepage backing; for libvirt add `<memoryBacking><hugepages/></memoryBacking>` to
+  the domain XML.
+
+```sh
+sudo vfio-isolate -u /run/vfio-isolate.undo hugepages 2M 16G
+```
+
+#### 2M or 1G
+
+2M pages allocate reliably at runtime; this was tested in a VM with heavily fragmented memory. 1G pages need
+physically contiguous gigabytes and at runtime often only partly succeed, with varying results per boot;
+`compact-memory` does not help when the fragmentation comes from unmovable kernel memory. For 1G pages, reserve them
+at boot (`hugepagesz=1G hugepages=N` on the kernel command line, and do not use this command for them) or reserve a
+CMA area with `hugetlb_cma=<size>` and check with `dmesg | grep hugetlb_cma` that the reservation succeeded. This
+1G recommendation is tested only in a VM so far.
+
 ### irq-affinity
 
 `vfio-isolate irq-affinity mask|add CPUS`
@@ -390,6 +426,8 @@ MCPUS=8-15,24-31
 UNDOFILE=/run/libvirt/qemu/vfio-isolate-$VM.undo
 
 enable_isolation () {
+    # VM backed by hugepages? Add "hugepages 2M 16G \" as its own line after
+    # the "compact-memory \" line below.
     vfio-isolate \
         -u $UNDOFILE \
         drop-caches \

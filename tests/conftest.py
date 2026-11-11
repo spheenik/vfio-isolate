@@ -21,6 +21,7 @@ _V2_NONSTD = "cgroup2 /mnt/cg2 cgroup2 rw,nosuid,nodev,noexec,relatime,nsdelegat
 _V2_UNIFIED = "cgroup2 /sys/fs/cgroup/unified cgroup2 rw,nosuid,nodev,noexec,relatime,nsdelegate 0 0"
 _V1_CPUSET = "cgroup /sys/fs/cgroup/cpuset cgroup rw,nosuid,nodev,noexec,relatime,cpuset 0 0"
 
+HUGEPAGE_SIZES = (2048, 1048576)
 LAYOUTS = ("v2", "v2-nonstandard", "hybrid", "v1", "no-cpuset", "none")
 
 
@@ -35,7 +36,10 @@ class FakeHost:
         self._monkeypatch = monkeypatch
         self.layout = None
         self.cgroup_mount = None  # absolute (fake-host) path of the cgroup2 mount, if any
+        self.hp_capacity = {}  # (size_kb, node) -> most pages the kernel can provide
+        self.hp_in_use = {}    # (size_kb, node) -> pages that cannot be released
         self._build_static()
+        self._patch_hugepages()
         self.set_layout("v2")
 
     # -- static sysfs/procfs parts -------------------------------------------------
@@ -60,10 +64,44 @@ class FakeHost:
         self._write(f"{node}/online", "0\n")
         self._write(f"{node}/possible", "0\n")
         self._write(f"{node}/node0/cpulist", f"0-{last}\n")
+        self._write("proc/meminfo", "MemTotal:       16384000 kB\nHugepagesize:       2048 kB\n")
+        for size in HUGEPAGE_SIZES:
+            for base in ("sys/kernel/mm", f"{node}/node0"):
+                self._write(f"{base}/hugepages/hugepages-{size}kB/nr_hugepages", "0\n")
         (self.root / "proc/irq").mkdir(parents=True, exist_ok=True)
         (self.root / "proc/sys/vm").mkdir(parents=True, exist_ok=True)
         self._write("proc/sys/vm/drop_caches", "0")
         self._write("proc/sys/vm/compact_memory", "0")
+
+    # -- hugepage pools -----------------------------------------------------------------
+    def _patch_hugepages(self):
+        """Writes to nr_hugepages clamp to the pool's capacity and never go below its in-use
+        count, like the kernel; the files stay real, the action's own logic runs unchanged."""
+        from vfio_isolate import hugepages
+        real_write = hugepages.write_count
+        host = self
+
+        def write_count(size_kb, node, count):
+            key = (size_kb, node)
+            count = min(count, host.hp_capacity.get(key, 10 ** 9))
+            count = max(count, host.hp_in_use.get(key, 0))
+            real_write(size_kb, node, count)
+
+        self._monkeypatch.setattr(hugepages, "write_count", write_count)
+
+    def set_hugepages(self, size_kb: int, count: int, node: Optional[int] = None,
+                      capacity: Optional[int] = None, in_use: int = 0):
+        """Set a pool's page count directly; capacity/in_use configure the model."""
+        from vfio_isolate import hugepages
+        key = (size_kb, node)
+        if capacity is not None:
+            self.hp_capacity[key] = capacity
+        self.hp_in_use[key] = in_use
+        (Path(hugepages.pool_dir(size_kb, node)) / "nr_hugepages").write_text(f"{count}\n")
+
+    def hugepages(self, size_kb: int, node: Optional[int] = None) -> int:
+        from vfio_isolate import hugepages
+        return hugepages.read_count(size_kb, node)
 
     # -- cgroup layouts --------------------------------------------------------------
     def _populate_cgroup_root(self, mount: str, with_cpuset=True):
@@ -359,6 +397,7 @@ def fake_host_factory(tmp_path, monkeypatch):
     def make(**kwargs):
         root = tmp_path / "root"
         root.mkdir()
+        (root / "run").mkdir()
         monkeypatch.setattr(fsroot, "ROOT", str(root))
         monkeypatch.setattr(privileges, "require_root", lambda: None)
         reset()

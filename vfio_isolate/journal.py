@@ -252,14 +252,26 @@ def _parse_records(data: bytes, start: int, path):
 class _Appender:
     def __init__(self, fd):
         self._fd = fd
+        self._last = None  # offset before the last non-empty append, None if nothing to discard
 
     def append(self, steps):
         steps = list(steps)
+        self._last = None
         if not steps:
             return
         line = json.dumps({"undo": [encode(s) for s in steps]}) + "\n"
+        offset = os.fstat(self._fd).st_size
         _write_all(self._fd, line.encode("utf-8"))
         os.fsync(self._fd)
+        self._last = offset
+
+    def discard_last(self):
+        """Remove the record written by the last append(); no-op if there is none."""
+        if self._last is None:
+            return
+        os.ftruncate(self._fd, self._last)
+        os.fsync(self._fd)
+        self._last = None
 
     def close(self):
         if self._fd is not None:

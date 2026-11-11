@@ -6,6 +6,10 @@ class PreconditionError(Exception):
     pass
 
 
+class RolledBackError(PreconditionError):
+    """Raised by an action that undid its own changes before failing."""
+
+
 @dataclass
 class Execution:
     action: type

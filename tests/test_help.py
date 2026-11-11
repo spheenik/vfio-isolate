@@ -35,3 +35,9 @@ def test_cpu_forms_documented_in_commands(capsys):
 
 def test_restore_help_mentions_newest_first(capsys):
     assert "newest first" in _help(capsys, "restore")
+
+
+def test_hugepages_help(capsys):
+    out = " ".join(_help(capsys, "hugepages").split())
+    for token in ("<pagesize>", "<amount>", "--node", "N<n>", "<page size=", "releases", "no undo record"):
+        assert token in out

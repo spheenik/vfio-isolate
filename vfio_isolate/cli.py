@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import sys
@@ -6,7 +7,7 @@ from dataclasses import dataclass, is_dataclass
 import click
 
 from vfio_isolate.action import *
-from vfio_isolate import cpuset, journal, output, privileges
+from vfio_isolate import cpuset, fsroot, hugepages, journal, output, privileges
 from vfio_isolate.privileges import NotRootError
 from vfio_isolate.systemd import SystemctlError
 from vfio_isolate.cpu import CPU
@@ -257,6 +258,73 @@ def cpu_governor(executor, **args):
         ))
 
 
+def cb_hugepage_size(ctx, param, value):
+    sizes = hugepages.available_sizes()
+    offered = " ".join(hugepages.format_size(s) for s in sizes) or "(none)"
+    try:
+        size = hugepages.parse_size(value)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    if size not in sizes:
+        raise click.BadParameter(f"{value!r} is not an available page size; available: {offered}")
+    return size
+
+
+def cb_hugepage_amount(ctx, param, value):
+    try:
+        return hugepages.parse_size(value)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+
+
+def cb_single_numa_node(ctx, param, value):
+    if value is None:
+        return None
+    if not value or value[0] != 'N':
+        raise click.BadParameter(f"{value!r}: --node takes a NUMA node written with N, e.g. N0")
+    nodes = sorted(cb_numa_nodeset(ctx, param, value))
+    if len(nodes) != 1:
+        raise click.BadParameter(f"{value!r}: --node takes exactly one node, e.g. N0")
+    return nodes[0]
+
+
+@cli.command('hugepages', help="""add pages to the hugepage pool
+
+Usage: hugepages [--node N<n>] <pagesize> <amount>  (options before the arguments)
+
+Raises the pool of <pagesize> pages by <amount> of memory, system-wide or on one NUMA
+node. Both are <n>K, <n>M or <n>G; <pagesize> must be one the kernel offers and
+<amount> an exact multiple of it. The page size must match the one the VM uses
+(libvirt: <page size=...> in <memoryBacking>).
+
+Examples: hugepages 2M 16G, hugepages 1G 16G, hugepages --node N0 1G 8G
+
+The undo releases the added pages again (never below zero), whatever else changed the
+pool meanwhile; pages still in use are freed when their user exits. If the kernel
+provides fewer pages than asked, the command fails, releases the pages it got and
+leaves no undo record.
+
+""")
+@click.argument("pagesize", metavar="<pagesize>", callback=cb_hugepage_size)
+@click.argument("amount", metavar="<amount>", callback=cb_hugepage_amount)
+@click.option("--node", metavar="N<n>", callback=cb_single_numa_node,
+              help="NUMA node to add the pages to, e.g. N0 (default: system-wide)")
+@click.pass_obj
+def hugepages_cmd(executor, pagesize, amount, node):
+    size = hugepages.format_size(pagesize)
+    if amount % pagesize:
+        raise click.BadParameter(f"{hugepages.format_size(amount)} is not a multiple of {size}",
+                                 param_hint="<amount>")
+    if node is not None and not os.path.isdir(hugepages.pool_dir(pagesize, node)):
+        have = [n for n in sorted(NUMANodeSet.online_nodes())
+                if os.path.isdir(hugepages.pool_dir(pagesize, n))]
+        raise click.BadParameter(f"NUMA node N{node} has no {size} hugepage pool; "
+                                 f"nodes with one: {' '.join(f'N{n}' for n in have) or '(none)'}",
+                                 param_hint="--node")
+    executor.add(HugePages, HugePages.Param(
+        size_kb=pagesize, node=node, count=amount // pagesize))
+
+
 @cli.command('restore')
 @click.argument("undo-file", metavar="<undo-file>")
 @click.pass_obj
@@ -317,6 +385,16 @@ class Executor:
 
     def run(self) -> int:
         privileges.require_root()
+        # one run at a time (also restore): concurrent hooks must not interleave
+        lock_fd = os.open(fsroot.path("/run/vfio-isolate.lock"),
+                          os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            return self._run()
+        finally:
+            os.close(lock_fd)
+
+    def _run(self) -> int:
         # fail before touching anything (record_undo reads cgroup files too)
         if self._needs_cgroup():
             cpuset.cgroup_root()
@@ -358,8 +436,16 @@ class Executor:
                 if appender:
                     appender.append(steps)
                     self.records += bool(steps)
+                changed_before = self.changed
                 self.changed = True
-                e.action.execute(e.params)
+                try:
+                    e.action.execute(e.params)
+                except RolledBackError:
+                    if appender and steps:
+                        appender.discard_last()
+                        self.records -= 1
+                    self.changed = changed_before
+                    raise
             close_scope()
         finally:
             if appender:
@@ -368,9 +454,18 @@ class Executor:
 
     @staticmethod
     def _restore(batch) -> int:
+        # the journal may have changed since parse time (another run holding the lock
+        # appended, or another restore finished): use what is on disk now
+        try:
+            records = journal.read_journal(batch.path)
+        except JournalError:
+            if not os.path.lexists(batch.path):
+                print(f"restore: {batch.path}: already restored", file=sys.stderr)
+                return 0
+            raise
         failed_records = []
         # newest record first, steps within a record in recorded order
-        for record in reversed(batch.records):
+        for record in reversed(records):
             failed = []
             for step in record:
                 try:
@@ -446,6 +541,11 @@ def main(argv=None) -> int:
     except PartitionInvalidError as e:
         what = f"{executor.current} failed: " if executor.current else ""
         _say(executor, f"{what}partition invalid: {e}")
+        return 1
+    except RolledBackError as e:
+        what = f"{executor.current} failed: " if executor.current else ""
+        extra = [] if executor.changed else ["nothing was changed"]
+        _say(executor, f"{what}{e}", *extra)
         return 1
     except (HostUnsupportedError, JournalError, PreconditionError, SystemctlError) as e:
         what = f"{executor.current} failed: " if executor.current else ""
