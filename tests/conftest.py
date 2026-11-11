@@ -40,6 +40,7 @@ class FakeHost:
         self.hp_in_use = {}    # (size_kb, node) -> pages that cannot be released
         self._build_static()
         self._patch_hugepages()
+        self._build_workqueue()
         self.set_layout("v2")
 
     # -- static sysfs/procfs parts -------------------------------------------------
@@ -72,6 +73,63 @@ class FakeHost:
         (self.root / "proc/sys/vm").mkdir(parents=True, exist_ok=True)
         self._write("proc/sys/vm/drop_caches", "0")
         self._write("proc/sys/vm/compact_memory", "0")
+
+    # -- unbound workqueue mask ----------------------------------------------------------
+    def _build_workqueue(self):
+        """cpumask/cpumask_requested/cpumask_isolated; a write to cpumask sets the requested
+        mask and the effective one to the written value (the kernel quirk: no isolation)."""
+        from vfio_isolate import workqueue
+        from vfio_isolate.nodeset import CPUNodeSet
+        self.has_requested = True
+        everything = workqueue.format_mask(CPUNodeSet(set(range(self.num_cpus))))
+        for name in ("cpumask", "cpumask_requested"):
+            self._write(f"sys/devices/virtual/workqueue/{name}", everything + "\n")
+        self._write("sys/devices/virtual/workqueue/cpumask_isolated", "00000000\n")
+        real_write = workqueue.write_cpumask
+        host = self
+
+        def write_cpumask(cpus):
+            real_write(cpus)
+            if host.has_requested:
+                host._write("sys/devices/virtual/workqueue/cpumask_requested",
+                            workqueue.format_mask(cpus) + "\n")
+
+        real_isolated = workqueue.read_isolated
+
+        def read_isolated():
+            """The file's value plus the CPUs of isolated partitions in the fake cgroup tree."""
+            result = set(real_isolated())
+            if host.cgroup_mount:
+                for part in (host.root / host.cgroup_mount.lstrip("/")).rglob("cpuset.cpus.partition"):
+                    if part.read_text().split()[:1] == ["isolated"]:
+                        result |= set(CPUNodeSet((part.parent / "cpuset.cpus").read_text().strip()))
+            return CPUNodeSet(result)
+
+        self._monkeypatch.setattr(workqueue, "write_cpumask", write_cpumask)
+        self._monkeypatch.setattr(workqueue, "read_isolated", read_isolated)
+        from vfio_isolate import irq
+        self._monkeypatch.setattr(irq, "irqbalance_running", lambda: False)
+
+    def workqueue_mask(self, name: str = "cpumask"):
+        """A workqueue mask file as a CPUNodeSet."""
+        from vfio_isolate.nodeset import CPUNodeSet
+        return CPUNodeSet.from_mask((self.root / "sys/devices/virtual/workqueue" / name).read_text())
+
+    def workqueue_effective(self):
+        """What the kernel would show in cpumask after recomputing: requested minus isolated."""
+        from vfio_isolate import workqueue
+        return workqueue.read_requested().intersection(workqueue.read_isolated().negation())
+
+    def set_workqueue(self, requested: str, isolated: str = ""):
+        """Set the masks from CPU lists; isolated CPUs go to cpumask_isolated only."""
+        from vfio_isolate import workqueue
+        from vfio_isolate.nodeset import CPUNodeSet
+        wq = "sys/devices/virtual/workqueue/"
+        req = CPUNodeSet(requested)
+        self._write(wq + "cpumask_requested", workqueue.format_mask(req) + "\n")
+        self._write(wq + "cpumask_isolated", workqueue.format_mask(CPUNodeSet(isolated)) + "\n")
+        self._write(wq + "cpumask", workqueue.format_mask(
+            req.intersection(CPUNodeSet(isolated).negation())) + "\n")
 
     # -- hugepage pools -----------------------------------------------------------------
     def _patch_hugepages(self):
@@ -400,6 +458,9 @@ def fake_host_factory(tmp_path, monkeypatch):
         (root / "run").mkdir()
         monkeypatch.setattr(fsroot, "ROOT", str(root))
         monkeypatch.setattr(privileges, "require_root", lambda: None)
+        # a real run is root; tests run as the current user, who owns the journals they create
+        from vfio_isolate import journal
+        monkeypatch.setattr(journal, "REAL_RUN_UID", os.geteuid())
         reset()
         return FakeHost(root, monkeypatch, **kwargs)
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from vfio_isolate import systemd
 from vfio_isolate.cpuset import CPUSet
+from vfio_isolate.dryrun import cpuset_exists, norm, tasks_phrase
 from .action import Action, Execution, PreconditionError
 
 REMOVE_TIMEOUT = 2.0
@@ -19,23 +20,49 @@ class CPUSetDelete(Action):
         cpuset_name: str
 
     @classmethod
-    def can_execute(cls, p: Param):
+    def can_execute(cls, p: Param, ctx=None):
         from .cpuset_modify import is_root
         if is_root(p.cpuset_name):
             raise PreconditionError("the root cgroup cannot be deleted")
         if systemd.unit_for_cgroup(p.cpuset_name):
             raise PreconditionError(f"cpuset {p.cpuset_name} is managed by systemd")
-        if not CPUSet(p.cpuset_name).exists():
+        if not cpuset_exists(p.cpuset_name, ctx):
             raise PreconditionError(f"cpuset {p.cpuset_name} does not exist")
-        cls._refuse_children(CPUSet(p.cpuset_name))
+        cls._refuse_children(CPUSet(p.cpuset_name), ctx)
         return True
 
     @staticmethod
-    def _refuse_children(cpu_set: CPUSet):
-        children = cpu_set.children()
+    def _refuse_children(cpu_set: CPUSet, ctx=None):
+        children = cpu_set.children() if cpu_set.exists() else []
+        if ctx is not None:
+            children = ctx.children(cpu_set.name(), children)
         if children:
             raise PreconditionError(
                 f"cpuset {cpu_set.name()} has child cgroups: {', '.join(children)}")
+
+    @classmethod
+    def describe(cls, p: Param, ctx):
+        n = ctx.tasks(p.cpuset_name)
+        parent = CPUSet(p.cpuset_name).parent().name()
+        late = " (after earlier steps)" if ctx.depends_on_earlier(p.cpuset_name) else ""
+        verb = "moves" if n == 1 else "move"
+        return [f"delete cpuset {p.cpuset_name}; its {tasks_phrase(n)} {verb} to {parent}{late}"]
+
+    @classmethod
+    def touches(cls, p):
+        keys = {("cpuset", norm(p.cpuset_name))}
+        try:
+            if CPUSet(p.cpuset_name).get_partition()[0] in ("root", "isolated"):
+                keys.add(("isolation",))  # deleting a partition frees its CPUs
+        except OSError:
+            pass  # not on disk (created by an earlier step): that step touched isolation itself
+        return keys
+
+    @classmethod
+    def overlay(cls, p, ctx):
+        if ctx.partition_of(p.cpuset_name) in ("root", "isolated"):
+            ctx.isolation_exact = False  # deleting a partition frees its CPUs
+        ctx.delete(p.cpuset_name)
 
     @classmethod
     def execute(cls, p: Param):

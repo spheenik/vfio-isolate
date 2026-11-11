@@ -28,9 +28,10 @@ def _rewrite_paths(argv, tmp_path):
             argv[i + 1] = str(tmp_path / "undo" / Path(argv[i + 1]).name)
             i += 1
         elif argv[i] == "restore" and i + 1 < len(argv):
-            argv[i + 1] = str(tmp_path / "undo" / Path(argv[i + 1]).name)
-            need.append(argv[i + 1])
-            i += 1
+            # restore [-n] FILE: FILE is the last argument
+            argv[-1] = str(tmp_path / "undo" / Path(argv[-1]).name)
+            need.append(argv[-1])
+            i = len(argv)
         i += 1
     return argv, need
 

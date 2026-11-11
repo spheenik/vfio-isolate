@@ -86,7 +86,8 @@ Example: a 16-core/32-thread CPU with two CCDs, CPUs 0-7,16-23 on CCD0 and 8-15,
 sudo vfio-isolate -u /run/vfio-isolate.undo \
     cpuset-modify --cpus C0-7,16-23 /system.slice \
     cpuset-modify --cpus C0-7,16-23 /user.slice \
-    irq-affinity mask C8-15,24-31
+    irq-affinity mask C8-15,24-31 \
+    workqueue-affinity mask C8-15,24-31
 ```
 
 ### Chaining
@@ -129,6 +130,62 @@ sudo vfio-isolate restore /run/vfio-isolate.undo
 - Undo files written by vfio-isolate 0.5.x are not supported and are refused. Run `restore` with 0.5.2
   (`pip install vfio-isolate==0.5.2`) for any VM prepared with 0.5.x before upgrading.
 - Keep the undo file on a volatile path such as `/run`: cpuset state does not survive a reboot either.
+
+### Dry run
+
+`-n` (`--dry-run`) checks a chain and prints what it would do, without changing anything: no write under `/sys`,
+`/proc` or the cgroup tree, no state-changing `systemctl` call, no journal and no lock. Use it to try a hook line
+before the first real run.
+
+```sh
+vfio-isolate -n -u /run/vfio-isolate.undo \
+    cpuset-modify --cpus C0-7,16-23 /system.slice \
+    irq-affinity mask C8-15 \
+    workqueue-affinity mask C8-15 \
+    hugepages 2M 16G \
+    cpu-governor performance C8-15
+```
+
+```
+would record undo in /run/vfio-isolate.undo
+would set unit system.slice (systemd): AllowedCPUs 0-31 -> 0-7,16-23
+would change affinity of 41 of 57 IRQs (mask 8-15)
+would set unbound workqueue mask: 0-31 -> 0-7,16-31
+would add 16G in 2M pages (8192) to the pool, now 0; whether the kernel can supply them shows only in a real run
+would set governor of CPUs 8-15: schedutil -> performance
+```
+
+- Preconditions are checked in order, as in a real run. The first one that fails ends the preview with
+  `vfio-isolate: dry run: <command> failed: <reason>` and exit status 1.
+- The preview follows the chain: a cpuset created by an earlier step exists for the later ones (`set cpuset /a (new):
+  cpus 8-15`), and task counts that depend on earlier steps are marked `(after earlier steps)`. Other values an
+  earlier step changes (a cpuset's CPUs, a governor, an IRQ's affinity, the workqueue mask, the hugepage pool) are not
+  simulated: the later step shows `(after earlier steps)` instead of the current value, and a precondition that
+  depends on them is not evaluated; the preview says `(precondition checked only in a real run: depends on earlier
+  steps)`.
+- The CPUs that earlier steps put into isolated cpuset partitions are tracked where they are known exactly (a
+  `cpuset-modify --cpus ... --partition isolated` on a cpuset that is not a partition yet, including one created
+  earlier in the chain). A later `workqueue-affinity mask`/`add` then refuses exactly like a real run (exit status 1).
+  Where the isolation is not exactly known (a partition without `--cpus`, new CPUs for a partition or for the parent
+  of one, deleting a partition, a restore step that changes one) the preview shows the note above instead.
+- With `-v`, `irq-affinity` also lists each IRQ that would change (`IRQ 24: 0-31 -> 0-7,16-23`).
+- `restore -n FILE` (or `-n restore FILE`; give the option before FILE) reads and validates the journal and prints
+  the undo steps, newest record first; the file is not touched. `restore FILE -n` (option after FILE) is a usage
+  error. Restore steps are not preconditions-checked, as in a real restore.
+- With `-n -u FILE`, FILE is validated as a real run would: header, 0.5.x format, records, mode, and its owner, which
+  must be root because a real run is (a file owned by you is refused). A truncated last line is reported
+  (`would drop truncated last line of FILE`), not trimmed. A directory that does not exist fails as in a real run. If
+  you cannot read an existing journal (root-owned, mode 0600), the preview says `would record undo in FILE (existing
+  journal not readable as this user; checked only in a real run)`.
+
+```sh
+vfio-isolate restore -n /run/vfio-isolate.undo
+```
+
+- A dry run does not need root where the files it reads are readable by the current user; a value it cannot read is
+  shown as `unknown (permission denied)` (or `does not exist`, or the error text). Journals are root-owned and mode 0600, so `restore -n` normally needs root.
+- A dry run cannot know what only the kernel decides: whether it can supply the hugepages, which IRQs refuse the new
+  affinity (`EIO`), which tasks cannot be moved, and whether a cpuset partition is accepted.
 
 ### Error reporting and exit statuses
 
@@ -285,6 +342,14 @@ Changes the affinity of all active IRQs.
 - Kernel-managed IRQs cannot be moved; they keep their affinity and are summarized (see
   [Error reporting](#error-reporting-and-exit-statuses)).
 - Undo restores each IRQ's previous affinity.
+- `irqbalance` rewrites IRQ affinities periodically and so silently undoes this command. If a process named
+  `irqbalance` is running, the command prints one warning to stderr per invocation (and still runs). Either stop it
+  around the VM (`systemctl stop irqbalance`, start it again afterwards) or ban the VM's CPUs in its configuration with
+  `IRQBALANCE_BANNED_CPULIST`. The config file differs by distribution, e.g. `/etc/default/irqbalance` or
+  `/etc/sysconfig/irqbalance`. irqbalance automatically avoids CPUs isolated with the kernel parameters `isolcpus=`
+  and `nohz_full=` (it reads `/sys/devices/system/cpu/isolated` and `nohz_full`), but most likely not CPUs isolated by
+  cpuset partitions: with partitions, set `IRQBALANCE_BANNED_CPULIST` or stop irqbalance. `IRQBALANCE_BANNED_CPUS`
+  (a hex mask) is deprecated since irqbalance 1.8.0.
 
 ```sh
 sudo vfio-isolate -u /run/vfio-isolate.undo irq-affinity mask C2-5,8-11
@@ -314,6 +379,28 @@ otherwise keeps only the failed steps and exits with status 1. Cannot be combine
 
 ```sh
 sudo vfio-isolate restore /run/vfio-isolate.undo
+```
+
+### workqueue-affinity
+
+`vfio-isolate workqueue-affinity mask|add CPUS`
+
+Restricts the CPUs that unbound kernel workqueues (writeback, block I/O, crypto, ...) run on, by
+changing `/sys/devices/virtual/workqueue/cpumask`. Per-CPU (bound) kworkers (`kworker/N:...`) cannot be moved and
+are not affected.
+
+- `mask CPUS`: removes the CPUs from the mask.
+- `add CPUS`: adds the CPUs to the mask.
+- The new mask is computed from the last requested mask. A result without any CPU is refused.
+- Refused while CPUs are in isolated cpuset partitions: the kernel already keeps unbound workqueues off them, and
+  writing the mask would lose them from it when the partition is removed. It is not needed with isolated partitions;
+  if combined, put it before the partition step (`workqueue-affinity mask ... cpuset-modify --partition isolated ...`).
+- A result without an online CPU is refused.
+- Undo restores the previous requested mask, minus the CPUs isolated at that time.
+
+```sh
+sudo vfio-isolate -u /run/vfio-isolate.undo workqueue-affinity mask C2-5,8-11
+sudo vfio-isolate workqueue-affinity add C2-5,8-11
 ```
 
 ## Recipes
@@ -435,7 +522,8 @@ enable_isolation () {
         cpuset-modify --cpus C$HCPUS /system.slice \
         cpuset-modify --cpus C$HCPUS /user.slice \
         compact-memory \
-        irq-affinity mask C$MCPUS
+        irq-affinity mask C$MCPUS \
+        workqueue-affinity mask C$MCPUS
 }
 
 disable_isolation () {

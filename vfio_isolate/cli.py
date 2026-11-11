@@ -12,6 +12,7 @@ from vfio_isolate.privileges import NotRootError
 from vfio_isolate.systemd import SystemctlError
 from vfio_isolate.cpu import CPU
 from vfio_isolate.cpuset import HostUnsupportedError, PartitionInvalidError
+from vfio_isolate import irq as irq_module
 from vfio_isolate.irq import IRQS
 from vfio_isolate.journal import JournalError
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet, NodeSet, NodeSetSyntaxError
@@ -100,11 +101,14 @@ MEMS_HELP = "N<list>: NUMA memory nodes, e.g. N0 or N0-1."
 @click.group(chain=True)
 @click.option('-v', '--verbose', help="enable verbose output", is_flag=True)
 @click.option('-d', '--debug', help="enable debug output", is_flag=True)
+@click.option('-n', '--dry-run', 'dry_run', is_flag=True,
+              help="Check the preconditions and print what each command would do; change nothing "
+                   "(no root needed where the files involved are readable).")
 @click.option('-u', '--undo-file', metavar="<undo-file>",
               help="Record the undo steps of each command in this file before the command runs "
                    "(appended to if the file exists). Undo with: vfio-isolate restore <undo-file>")
 @click.pass_obj
-def cli(executor, verbose, debug, undo_file):
+def cli(executor, verbose, debug, dry_run, undo_file):
     """Isolate CPUs and memory for VFIO VMs.
 
     Commands can be chained; they run in the order given, and all arguments are
@@ -122,6 +126,7 @@ def cli(executor, verbose, debug, undo_file):
     output.verbose_enabled = verbose
     output.debug_enabled = debug
     executor.undo_file = undo_file
+    executor.dry_run = dry_run
 
 
 @cli.command('drop-caches')
@@ -210,6 +215,8 @@ irq-affinity add CPUS   add the CPUs to each IRQ's affinity
 @click.argument("cpus", metavar="<cpus>", callback=cb_cpu_nodeset)
 @click.pass_obj
 def irq_affinity(executor, **args):
+    if irq_module.irqbalance_running():
+        click.echo(irq_module.IRQBALANCE_WARNING, err=True)
     group = object()  # all IRQs of this command form one failure scope
     for irq in IRQS.active():
         executor.add(IRQAffinity, IRQAffinity.Param(
@@ -217,6 +224,26 @@ def irq_affinity(executor, **args):
             operation=args["operation"],
             cpus=args["cpus"]
         ), group=group)
+
+
+@cli.command('workqueue-affinity', help="""restrict the CPUs of unbound kernel workqueues
+
+\b
+workqueue-affinity mask CPUS  remove the CPUs from the unbound workqueue mask
+workqueue-affinity add CPUS   add the CPUs to the unbound workqueue mask
+
+CPUs in isolated cpuset partitions are never written (the kernel already keeps
+workqueues off them). A result without any CPU is refused.
+
+""" + CPUS_DOC)
+@click.argument("operation", type=click.Choice(["mask", "add"], case_sensitive=False))
+@click.argument("cpus", metavar="<cpus>", callback=cb_cpu_nodeset)
+@click.pass_obj
+def workqueue_affinity(executor, **args):
+    executor.add(WorkqueueAffinity, WorkqueueAffinity.Param(
+        operation=WorkqueueOperation[args["operation"].lower()],
+        cpus=args["cpus"]
+    ))
 
 
 @cli.command('cpu-governor', help="""set the CPU governor for the given CPUs
@@ -250,12 +277,13 @@ def cpu_governor(executor, **args):
         raise click.BadParameter(
             "; ".join(problems) + f"; available governors: {' '.join(union) or '(none)'}",
             param_hint="governor")
+    group = object()
     for n in args["cpus"]:
         cpu = CPU(n)
         executor.add(CPUGovernor, CPUGovernor.Param(
             cpu=cpu,
             governor=args["governor"]
-        ))
+        ), group=group)
 
 
 def cb_hugepage_size(ctx, param, value):
@@ -326,9 +354,12 @@ def hugepages_cmd(executor, pagesize, amount, node):
 
 
 @cli.command('restore')
+@click.option('-n', '--dry-run', 'dry_run', is_flag=True,
+              help="Print what the restore would do; change nothing (same as the global -n; "
+                   "give it before <undo-file>).")
 @click.argument("undo-file", metavar="<undo-file>")
 @click.pass_obj
-def restore(executor, undo_file):
+def restore(executor, dry_run, undo_file):
     """restore a previous state using an undo file
 
     Undoes all recorded runs, newest first. The file is deleted on success; on
@@ -337,7 +368,10 @@ def restore(executor, undo_file):
     """
     if executor.undo_file:
         raise click.UsageError("-u/--undo-file cannot be combined with restore")
-    privileges.require_root()
+    if dry_run:
+        executor.dry_run = True
+    if not executor.dry_run:
+        privileges.require_root()
     # read and decode now, so a bad file stops the whole chain before anything runs
     records = journal.read_journal(undo_file)
     st = os.stat(undo_file)
@@ -358,6 +392,7 @@ class Executor:
     def __init__(self):
         self.executions = []  # Execution or RestoreBatch
         self.undo_file = None
+        self.dry_run = False
         self.restore_ids = set()  # (st_dev, st_ino) of journals already queued for restore
         self.restore_path = None  # undo file of the restore batch being replayed, if any
         self.current = None   # name of the action being checked/recorded/executed, or "restore"
@@ -383,7 +418,82 @@ class Executor:
                 return True
         return False
 
+    def run_dry(self) -> int:
+        """Preview: check preconditions and print what each action would do; change nothing.
+
+        No root check, lock, journal or execute, and no record_undo (describe reads current
+        values itself, read-only)."""
+        from vfio_isolate.dryrun import DryRunContext, UNCHECKED_NOTE
+        journal_status = None
+        if self._needs_cgroup():
+            cpuset.cgroup_root()
+        if self.undo_file:
+            # a real run fails on a bad journal before changing anything: so does the preview
+            journal_status = journal.check_for_append(self.undo_file)
+        ctx = DryRunContext()
+        announced = False
+
+        pending = []  # (action, params) of a batch action, described together
+        pending_group = None
+
+        def flush():
+            if pending:
+                action = pending[0][0]
+                for line in action.describe_many([p for _, p in pending], ctx):
+                    print(line if line.startswith(" ") else f"would {line}")
+                for _, p in pending:
+                    ctx.apply(action, p)
+                pending.clear()
+
+        def show(action, params, group=None):
+            nonlocal pending_group
+            if pending and not (action is pending[0][0] and group is pending_group):
+                flush()
+            if action.batch:
+                pending.append((action, params))
+                pending_group = group
+                return
+            for line in action.describe(params, ctx):
+                print(f"would {line}")
+            if ctx.unchecked:
+                print(UNCHECKED_NOTE)
+                ctx.unchecked = False
+            ctx.apply(action, params)
+
+        for e in self.executions:
+            if isinstance(e, RestoreBatch):
+                flush()
+                self.current = "restore"
+                print(f"would restore {e.path} ({len(e.records)} "
+                      f"record{'s' if len(e.records) != 1 else ''}, newest first)")
+                for record in reversed(e.records):
+                    group = object()  # a record is one batch scope: records never merge
+                    for step in record:
+                        show(step.action, step.params, group)
+                flush()
+                continue
+            if pending and not (e.action is pending[0][0] and self.groups.get(id(e)) is pending_group):
+                flush()
+            self.current = e.action.name
+            ctx.unchecked = False
+            if e.action.can_execute(e.params, ctx) is False:
+                raise PreconditionError(f"{e.action.name}: precondition failed")
+            if self.undo_file and not announced:
+                if journal_status == "unreadable":
+                    print(f"would record undo in {self.undo_file} (existing journal not readable "
+                          f"as this user; checked only in a real run)")
+                else:
+                    print(f"would record undo in {self.undo_file}")
+                if journal_status == "truncated":
+                    print(f"would drop truncated last line of {self.undo_file}")
+                announced = True
+            show(e.action, e.params, self.groups.get(id(e)))
+        flush()
+        return 0
+
     def run(self) -> int:
+        if self.dry_run:
+            return self.run_dry()
         privileges.require_root()
         # one run at a time (also restore): concurrent hooks must not interleave
         lock_fd = os.open(fsroot.path("/run/vfio-isolate.lock"),
@@ -493,6 +603,8 @@ class Executor:
 
 
 def _hint(executor):
+    if executor.dry_run:
+        return None
     if executor.undo_file and executor.records:
         return f'run "vfio-isolate restore {executor.undo_file}" to undo the changes made so far'
     if not executor.undo_file and executor.changed:
@@ -505,7 +617,8 @@ def _say(executor, message, *extra):
     hint = _hint(executor)
     if hint:
         parts.append(hint)
-    print("vfio-isolate: " + "; ".join(parts), file=sys.stderr)
+    marker = "dry run: " if executor.dry_run else ""
+    print("vfio-isolate: " + marker + "; ".join(parts), file=sys.stderr)
 
 
 def _interrupted(executor):

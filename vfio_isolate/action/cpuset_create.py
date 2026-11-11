@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from vfio_isolate import systemd
 from vfio_isolate.cpuset import CPUSet
+from vfio_isolate.dryrun import cpuset_exists, norm
 from .action import Action, Execution, PreconditionError
 
 
@@ -14,7 +15,7 @@ class CPUSetCreate(Action):
         cpuset_name: str
 
     @classmethod
-    def can_execute(cls, p: Param):
+    def can_execute(cls, p: Param, ctx=None):
         from .cpuset_modify import is_root
         if is_root(p.cpuset_name):
             raise PreconditionError("the root cgroup cannot be created")
@@ -30,9 +31,21 @@ class CPUSetCreate(Action):
                         f"the parent {ancestor} is managed by systemd and does not delegate "
                         f"(Delegate=no); cannot create {p.cpuset_name}")
                 break
-        if CPUSet(p.cpuset_name).exists():
+        if cpuset_exists(p.cpuset_name, ctx):
             raise PreconditionError(f"cpuset {p.cpuset_name} already exists")
         return True
+
+    @classmethod
+    def touches(cls, p):
+        return {("cpuset", norm(p.cpuset_name))}
+
+    @classmethod
+    def describe(cls, p, ctx):
+        return [f"create cpuset {p.cpuset_name}"]
+
+    @classmethod
+    def overlay(cls, p, ctx):
+        ctx.create(p.cpuset_name)
 
     @classmethod
     def execute(cls, p: Param):

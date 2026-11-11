@@ -60,3 +60,60 @@ class IRQAffinity(Action):
                             operation=IRQAffinityOperation.mask,
                             cpus=p.cpus.negation().intersection(masked.negation())
                         ))
+
+    batch = True
+
+    @classmethod
+    def _new_affinity(cls, p: Param, current):
+        """What execute would write for an IRQ whose affinity is current."""
+        if p.operation == IRQAffinityOperation.add:
+            return current.union(p.cpus)
+        remaining = current.intersection(p.cpus.negation())
+        return remaining if remaining else p.cpus.negation()
+
+    @classmethod
+    def touches(cls, p):
+        return {("irq", p.irq.number)}
+
+    @classmethod
+    def describe(cls, p, ctx):
+        return cls.describe_many([p], ctx)
+
+    @classmethod
+    def describe_many(cls, ps, ctx):
+        """One summary for all IRQs of a command; with -v also one line per changing IRQ."""
+        from vfio_isolate import output
+        from vfio_isolate.dryrun import unknown
+        total = changing = dependent = 0
+        seen = set()
+        unreadable = {}  # reason -> count
+        detail = []
+        for p in ps:
+            if not p.irq.exists():
+                continue
+            total += 1
+            if p.irq.number in seen or ctx.depends(cls.reads(p)):
+                dependent += 1  # an earlier step (or earlier in this batch) changes it
+                continue
+            seen.add(p.irq.number)
+            try:
+                old = p.irq.get_affinity()
+            except OSError as e:
+                reason = unknown(e)
+                unreadable[reason] = unreadable.get(reason, 0) + 1
+                continue
+            new = cls._new_affinity(p, old)
+            if new != old:
+                changing += 1
+                detail.append(f"  IRQ {p.irq.number}: {old.to_list_form()} -> {new.to_list_form()}")
+        ops = {(p.operation, p.cpus.to_list_form()) for p in ps}
+        how = ""
+        if len(ops) == 1:
+            op, cpus = next(iter(ops))
+            how = f" ({op.name} {cpus})"
+        line = f"change affinity of {changing} of {total} IRQ{'s' if total != 1 else ''}{how}"
+        if unreadable:
+            line += "; " + ", ".join(f"{n} {reason}" for reason, n in unreadable.items())
+        if dependent:
+            line += f"; {dependent} depend{'s' if dependent == 1 else ''} on earlier steps"
+        return [line] + (detail if output.verbose_enabled else [])

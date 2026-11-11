@@ -47,3 +47,25 @@ class HugePages(Action):
         if not p.release:
             yield Execution(HugePages, HugePages.Param(
                 size_kb=p.size_kb, node=p.node, count=p.count, release=True))
+
+    @classmethod
+    def touches(cls, p):
+        return {("hugepages", p.size_kb)}  # per size: node and system pools overlap
+
+    @classmethod
+    def describe(cls, p, ctx):
+        from vfio_isolate.dryrun import unknown, AFTER_EARLIER
+        fmt = hugepages.format_size
+        if ctx.depends(cls.reads(p)):
+            now = AFTER_EARLIER
+        else:
+            try:
+                now = str(hugepages.read_count(p.size_kb, p.node))
+            except OSError as e:
+                now = unknown(e)
+        amount = f"{fmt(p.count * p.size_kb)} in {fmt(p.size_kb)} pages ({p.count})"
+        where = f"pool on node N{p.node}" if p.node is not None else "pool"
+        if p.release:
+            return [f"release {amount} from the {where}, now {now}"]
+        return [f"add {amount} to the {where}, now {now}; "
+                f"whether the kernel can supply them shows only in a real run"]

@@ -1,6 +1,8 @@
 import os
 from typing import Generator
 
+import psutil
+
 from vfio_isolate import fsroot
 from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 from vfio_isolate import output
@@ -54,3 +56,20 @@ class IRQS:
         for file in os.listdir(IRQ.base_path()):
             if file.isnumeric():
                 yield IRQ(int(file))
+
+
+IRQBALANCE_WARNING = ("vfio-isolate: warning: irqbalance is running and will overwrite IRQ affinities; stop it or ban the "
+                      "VM's CPUs in its configuration (IRQBALANCE_BANNED_CPULIST)")
+
+
+def irqbalance_running() -> bool:
+    try:
+        for proc in psutil.process_iter(['name']):
+            try:
+                if proc.info.get('name') == 'irqbalance':
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+    return False

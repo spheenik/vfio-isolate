@@ -6,6 +6,7 @@ actions and known parameter types can be decoded, so reading a journal never run
 arbitrary code.
 """
 import dataclasses
+import errno
 import fcntl
 import json
 import os
@@ -22,6 +23,7 @@ from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
 FORMAT = "vfio-isolate-undo"
 VERSION = 1
 HEADER = {"format": FORMAT, "version": VERSION}
+REAL_RUN_UID = 0  # a real run is root; the preview checks the journal's owner against this
 
 __all__ = ['JournalError', 'encode', 'decode', 'open_for_append', 'read_journal', 'rewrite']
 
@@ -164,14 +166,19 @@ def _open_fd(path, flags, mode=0o600):
         raise JournalError(f"cannot open undo file {path}: {e.strerror}")
 
 
-def _check_fd(fd, path):
-    st = os.fstat(fd)
+def _check_stat(st, path, uid):
+    """The type, owner and mode rules for a journal file (shared by a real run and the preview)."""
     if not stat.S_ISREG(st.st_mode):
         raise JournalError(f"undo file {path} is not a regular file")
-    if st.st_uid != os.geteuid():
+    if st.st_uid != uid:
         raise JournalError(f"undo file {path} is not owned by the current user")
     if st.st_mode & 0o022:
         raise JournalError(f"undo file {path} is writable by group or others")
+
+
+def _check_fd(fd, path):
+    st = os.fstat(fd)
+    _check_stat(st, path, os.geteuid())
     # opened O_NONBLOCK so special files cannot block; regular files need no such flag
     fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
     return st
@@ -249,6 +256,15 @@ def _parse_records(data: bytes, start: int, path):
     return records, "complete", tail_start
 
 
+def _existing_tail(data: bytes, path):
+    """Validate the content of an existing non-empty journal the way an append needs it:
+    header (incl. 0.5.x pickle detection) and every record. Returns (tail, tail_start) as
+    _parse_records does. Shared by open_for_append and check_for_append."""
+    start = _check_header(data, path)
+    _, tail, tail_start = _parse_records(data, start, path)
+    return tail, tail_start
+
+
 class _Appender:
     def __init__(self, fd):
         self._fd = fd
@@ -303,8 +319,7 @@ def open_for_append(path) -> _Appender:
         else:
             os.lseek(fd, 0, os.SEEK_SET)
             data = _read_all(fd)
-            start = _check_header(data, path)
-            _, tail, tail_start = _parse_records(data, start, path)
+            tail, tail_start = _existing_tail(data, path)
             if tail == "complete":
                 _write_all(fd, b"\n")
                 os.fsync(fd)
@@ -316,6 +331,51 @@ def open_for_append(path) -> _Appender:
     except BaseException:
         os.close(fd)
         raise
+
+
+def check_for_append(path):
+    """Dry run of open_for_append: raise the JournalError a real run would, change nothing.
+
+    A real run is always root, so the file must be owned by uid 0 (not by the caller).
+    Returns None, "truncated" (a real run drops a truncated last line) or "unreadable"
+    (this user cannot read the file, so only a real run can check its content)."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        # a real run creates the file, which needs an existing directory
+        parent = os.path.dirname(os.path.abspath(path))
+        try:
+            pst = os.stat(parent)
+        except FileNotFoundError:
+            raise JournalError(f"undo file {path} does not exist")
+        except OSError as e:
+            raise JournalError(f"cannot open undo file {path}: {e.strerror}")
+        if not stat.S_ISDIR(pst.st_mode):
+            raise JournalError(f"cannot open undo file {path}: Not a directory")
+        return None
+    except PermissionError:
+        return "unreadable"
+    except OSError as e:
+        raise JournalError(f"cannot open undo file {path}: {e.strerror}")
+    if stat.S_ISLNK(st.st_mode):
+        raise JournalError(f"cannot open undo file {path}: {os.strerror(errno.ELOOP)}")
+    _check_stat(st, path, REAL_RUN_UID)
+    if st.st_size == 0:
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except PermissionError:
+        return "unreadable"
+    except OSError as e:
+        raise JournalError(f"cannot open undo file {path}: {e.strerror}")
+    try:
+        data = _read_all(fd)
+    finally:
+        os.close(fd)
+    if not data:
+        return None
+    tail, _ = _existing_tail(data, path)
+    return "truncated" if tail == "truncated" else None
 
 
 def read_journal(path) -> list:

@@ -14,7 +14,7 @@ breaking changes in CHANGELOG.md.
 - `action/` — one `Action` subclass per command, classmethods `can_execute`, `execute`,
   `record_undo` (yields `Execution`s in the order they must be applied; restore reverses
   actions, never steps). Stable `name` = CLI command, registered in `ACTIONS`. New command =
-  action + `ACTIONS` + click command + README section (a test checks the heading).
+  action (incl. `describe` and `touches` for `-n`, tested; `reads`/`overlay` where needed) + `ACTIONS` + click command + README section (a test checks the heading).
 - `journal.py` — JSON Lines undo journal; 0.5.x pickle files are detected and refused.
   Never load pickles (the generated parser contains lark's pickle code; it is unused).
 - `cpuset.py` — cgroup v2 only; lazy `cgroup_root()` raises `HostUnsupportedError`.

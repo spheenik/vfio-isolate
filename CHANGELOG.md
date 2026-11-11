@@ -34,6 +34,14 @@
 
 ### New
 
+- `-n`/`--dry-run` previews a chain without changing anything: it checks the preconditions of each command in order
+  and prints what each would do, with current and new values (`would set governor of CPUs 8-15: schedutil ->
+  performance`). It takes no lock, writes no journal and does not need root where the files are readable;
+  `restore -n FILE` (or `-n restore FILE`) previews an undo file. Values an earlier step of the chain changes are marked `(after earlier steps)`, and preconditions that depend on them are reported as checked only in a real run. What only a real run shows (hugepage shortfalls, IRQs the kernel refuses,
+  unmovable tasks, a partition the kernel rejects) is not predicted.
+- `workqueue-affinity mask|add CPUS` restricts the unbound kernel workqueues (kworkers) to other CPUs; CPUs in
+  isolated partitions are never written; undo restores the previous mask.
+- `irq-affinity` warns once per command when `irqbalance` is running, since it overwrites IRQ affinities.
 - `hugepages [--node N<n>] PAGESIZE AMOUNT` adds pages to the hugepage pool (#2, #10); undo releases them again. If
   the kernel provides fewer pages than asked, the command fails, releases what it got and leaves no undo record.
 - Runs are serialized by a lock (`/run/vfio-isolate.lock`), so concurrent hooks do not interleave.
