@@ -41,3 +41,9 @@ def test_hugepages_help(capsys):
     out = " ".join(_help(capsys, "hugepages").split())
     for token in ("<pagesize>", "<amount>", "--node", "N<n>", "<page size=", "releases", "no undo record"):
         assert token in out
+
+
+def test_kthread_affinity_help(capsys):
+    out = " ".join(_help(capsys, "kthread-affinity").split())
+    for token in ("kthreadd", "inherit", "Per-CPU kernel threads refuse", "isolated cpuset partitions", "M<mask>"):
+        assert token in out

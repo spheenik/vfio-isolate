@@ -512,3 +512,89 @@ def test_restore_with_dry_run_after_the_file_is_a_usage_error(host, j, capsys):
     assert open(j, "rb").read() == before  # journal unchanged
     assert (host.root / "sys/fs/cgroup/a/cpuset.cpus").read_text() == cpus  # nothing restored
     assert "would" not in out
+
+
+# -- kthread-affinity ---------------------------------------------------------------------
+
+def add_kthreads(host):
+    host.add_kthread(2, "kthreadd", affinity="0-7")
+    host.add_kthread(30, "kswapd0", affinity="0-7")
+    host.add_kthread(31, "khugepaged", affinity="4-7")
+    host.add_kthread(40, "ksoftirqd/1", affinity="1", percpu=True)  # not listed
+    host.add_process(500, "sshd")
+
+
+KT_NOTE = "  (threads that refuse are only known in a real run)"
+
+
+def test_kthread_preview_summary_and_verbose(host, capsys):
+    add_kthreads(host)
+    rc, out, err = run(["-n", "kthread-affinity", "mask", "C4-5"], capsys)
+    assert rc == 0, err
+    assert out.splitlines() == ["would set affinity of kthreadd and 2 of 2 kernel threads: mask 4-5", KT_NOTE]
+    rc, out, err = run(["-n", "-v", "kthread-affinity", "mask", "C4-5"], capsys)
+    assert out.splitlines() == [
+        "would set affinity of kthreadd and 2 of 2 kernel threads: mask 4-5", KT_NOTE,
+        "  2 kthreadd: 0-7 -> 0-3,6-7", "  30 kswapd0: 0-7 -> 0-3,6-7", "  31 khugepaged: 4-7 -> 6-7"]
+    assert host.setaffinity_calls == []
+    assert host.thread_affinity(2) == "0-7"
+
+
+def test_kthread_preview_gone_thread(host, monkeypatch, capsys):
+    add_kthreads(host)
+    host.exit_thread(31)
+    rc, out, err = run(["-n", "kthread-affinity", "mask", "C4-5"], capsys)
+    assert rc == 0, err
+    assert out.splitlines()[0] == "would set affinity of kthreadd and 1 of 1 kernel thread: mask 4-5; 1 gone"
+
+
+def test_kthread_preview_refusal(host, capsys):
+    add_kthreads(host)
+    host.set_workqueue("0-7", isolated="4-7")
+    rc, out, err = run(["-n", "kthread-affinity", "mask", "C0"], capsys)
+    assert rc == 1
+    assert err.startswith("vfio-isolate: dry run: kthread-affinity failed: CPUs 4-7 are in isolated cpuset")
+
+
+def test_partition_then_kthread_is_not_a_false_pass(host, capsys):
+    add_kthreads(host)
+    host.mkcg("a")
+    rc, out, err = run(["-n", "cpuset-modify", "--cpus", "C4-7", "--partition", "isolated", "/a",
+                        "kthread-affinity", "mask", "C4-7"], capsys)
+    assert rc == 1
+    assert err.startswith("vfio-isolate: dry run: kthread-affinity failed: CPUs 4-7 are in isolated cpuset")
+    assert NOTE not in out
+    # CPUs not known beforehand: a note instead of a verdict
+    rc, out, err = run(["-n", "cpuset-modify", "--partition", "isolated", "/a",
+                        "kthread-affinity", "mask", "C4-7"], capsys)
+    assert rc == 0, err
+    lines = out.splitlines()
+    assert lines[-3] == "would set affinity of kthreadd and 0 of 2 kernel threads: mask 4-7; 3 depend on earlier steps"
+    assert lines[-1].strip() == NOTE
+    # the other order is checked for real
+    rc, out, err = run(["-n", "kthread-affinity", "mask", "C4-7", "cpuset-modify", "--cpus", "C4-7",
+                        "--partition", "isolated", "/a"], capsys)
+    assert rc == 0, err
+    assert NOTE not in out and out.startswith("would set affinity of kthreadd and 2 of 2 kernel threads")
+
+
+def test_kthread_twice_marks_the_second(host, capsys):
+    add_kthreads(host)
+    rc, out, err = run(["-n", "kthread-affinity", "mask", "C4-7", "kthread-affinity", "add", "C6"], capsys)
+    assert rc == 0, err
+    lines = out.splitlines()
+    assert lines[0].startswith("would set affinity of kthreadd and ")
+    assert lines[2] == "would set affinity of kthreadd and 0 of 2 kernel threads: add 6; 3 depend on earlier steps"
+
+
+def test_kthread_restore_preview(host, tmp_path, capsys):
+    add_kthreads(host)
+    j = str(tmp_path / "j")
+    assert main(["-u", j, "kthread-affinity", "mask", "C0-1"]) == 0
+    capsys.readouterr()
+    rc, out, err = run(["-n", "restore", j], capsys)
+    assert rc == 0, err
+    assert out.splitlines()[1:] == [
+        "would restore affinity of 0 of 1 kernel thread", KT_NOTE,   # khugepaged: unchanged
+        "would restore affinity of 1 of 1 kernel thread", KT_NOTE,   # kswapd0
+        "would restore affinity of kthreadd", KT_NOTE]

@@ -7,7 +7,7 @@ from vfio_isolate import journal
 from vfio_isolate.action import (ACTIONS, Execution, CompactMemory, CPUGovernor, CPUSetCreate,
                                  CPUSetDelete, CPUSetModify, DropCaches, IRQAffinity,
                                  IRQAffinityOperation, MoveTasks, HugePages,
-                                 WorkqueueAffinity, WorkqueueOperation)
+                                 WorkqueueAffinity, WorkqueueOperation, KThreadAffinity, KThreadOperation)
 from vfio_isolate.cpu import CPU
 from vfio_isolate.irq import IRQ
 from vfio_isolate.journal import JournalError, encode, decode
@@ -35,6 +35,11 @@ def all_executions():
                                                              cpus=CPUNodeSet("8-15"))),
         Execution(WorkqueueAffinity, WorkqueueAffinity.Param(operation=WorkqueueOperation.restore,
                                                              cpus=CPUNodeSet("0-7,16-31"))),
+        Execution(KThreadAffinity, KThreadAffinity.Param(operation=KThreadOperation.mask, pid=2,
+                                                         cpus=CPUNodeSet("8-15"), starttime=None, comm=None)),
+        Execution(KThreadAffinity, KThreadAffinity.Param(operation=KThreadOperation.restore, pid=1234,
+                                                         cpus=CPUNodeSet("0-7,16-31"), starttime=98765,
+                                                         comm="kworker/u16:2-events")),
         Execution(HugePages, HugePages.Param(size_kb=2048, node=None, count=8, release=False)),
         Execution(HugePages, HugePages.Param(size_kb=1048576, node=0, count=2, release=True)),
     ]
@@ -43,7 +48,7 @@ def all_executions():
 def test_registry_names():
     assert set(ACTIONS) == {"cpuset-create", "cpuset-modify", "cpuset-delete", "move-tasks",
                             "irq-affinity", "cpu-governor", "drop-caches", "compact-memory", "hugepages",
-                            "workqueue-affinity"}
+                            "workqueue-affinity", "kthread-affinity"}
     for name, cls in ACTIONS.items():
         assert cls.name == name
 
@@ -368,3 +373,10 @@ def test_fifo_rejected_without_blocking(tmp_path):
         journal.read_journal(str(p))
     with pytest.raises(JournalError):
         journal.open_for_append(str(p))
+
+
+def test_kthread_restore_without_starttime_fails_cleanly():
+    d = {"action": "kthread-affinity",
+         "params": {"operation": "restore", "pid": 4, "cpus": "0-3"}}  # an older journal of this format
+    with pytest.raises(JournalError, match="missing field"):
+        decode(d)

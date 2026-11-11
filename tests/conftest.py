@@ -41,6 +41,7 @@ class FakeHost:
         self._build_static()
         self._patch_hugepages()
         self._build_workqueue()
+        self._patch_kthreads()
         self.set_layout("v2")
 
     # -- static sysfs/procfs parts -------------------------------------------------
@@ -130,6 +131,65 @@ class FakeHost:
         self._write(wq + "cpumask_isolated", workqueue.format_mask(CPUNodeSet(isolated)) + "\n")
         self._write(wq + "cpumask", workqueue.format_mask(
             req.intersection(CPUNodeSet(isolated).negation())) + "\n")
+
+    # -- kernel threads -------------------------------------------------------------------
+    PF_KTHREAD = 0x00200000
+    PF_FORKNOEXEC = 0x00000040
+    PF_NO_SETAFFINITY = 0x04000000
+
+    def _patch_kthreads(self):
+        """In-memory affinity model behind kthread.get_affinity/set_affinity.
+
+        /proc/<pid>/stat files are real (add_kthread / add_process); the model holds the affinity
+        per PID. Threads marked percpu carry PF_NO_SETAFFINITY (and are not listed); threads marked
+        refuses answer a new affinity with EINVAL without the flag (a race); PIDs that left the model (exit_thread) raise ESRCH."""
+        from vfio_isolate import kthread
+        from vfio_isolate.nodeset import CPUNodeSet
+        self.threads = {}  # pid -> {"affinity": CPUNodeSet, "refuses": bool}
+        self.setaffinity_calls = []  # (pid, CPUNodeSet) of every attempt
+        host = self
+
+        def get_affinity(pid):
+            if pid not in host.threads:
+                raise ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH))
+            return host.threads[pid]["affinity"]
+
+        def set_affinity(pid, cpus):
+            host.setaffinity_calls.append((pid, cpus))
+            if pid not in host.threads:
+                raise ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH))
+            if host.threads[pid]["refuses"]:
+                raise OSError(errno.EINVAL, os.strerror(errno.EINVAL))
+            host.threads[pid]["affinity"] = CPUNodeSet(set(cpus))
+
+        self._monkeypatch.setattr(kthread, "get_affinity", get_affinity)
+        self._monkeypatch.setattr(kthread, "set_affinity", set_affinity)
+
+    def _add_thread(self, pid, comm, flags, affinity, refuses, starttime=5):
+        from vfio_isolate.nodeset import CPUNodeSet
+        # pid (comm) state ppid pgrp session tty_nr tpgid flags minflt ... starttime (field 22)
+        self._write(f"proc/{pid}/stat",
+                    f"{pid} ({comm}) S 2 0 0 0 -1 {flags} 0 0 0 0 0 0 0 0 20 0 1 0 {starttime} 0 0\n")
+        aff = CPUNodeSet(affinity) if affinity is not None else CPUNodeSet(set(range(self.num_cpus)))
+        self.threads[pid] = {"affinity": aff, "refuses": refuses}
+
+    def add_kthread(self, pid: int, comm: str, affinity: Optional[str] = None, percpu: bool = False,
+                    refuses: bool = False, starttime: int = 5):
+        """A kernel thread (PF_KTHREAD set); affinity is a CPU list, default all CPUs. percpu: also
+        PF_NO_SETAFFINITY. refuses: no flag, but setting the affinity fails with EINVAL."""
+        flags = self.PF_KTHREAD | 0x00004000 | (self.PF_NO_SETAFFINITY if percpu else 0)
+        self._add_thread(pid, comm, flags, affinity, percpu or refuses, starttime)
+
+    def add_process(self, pid: int, comm: str, affinity: Optional[str] = None, starttime: int = 5):
+        """A normal process: no PF_KTHREAD, must be ignored by kthread-affinity."""
+        self._add_thread(pid, comm, self.PF_FORKNOEXEC, affinity, False, starttime)
+
+    def exit_thread(self, pid: int):
+        """The thread exits: its /proc entry may still be listed, but affinity calls get ESRCH."""
+        self.threads.pop(pid, None)
+
+    def thread_affinity(self, pid: int) -> str:
+        return self.threads[pid]["affinity"].to_list_form()
 
     # -- hugepage pools -----------------------------------------------------------------
     def _patch_hugepages(self):

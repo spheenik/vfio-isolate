@@ -87,7 +87,8 @@ sudo vfio-isolate -u /run/vfio-isolate.undo \
     cpuset-modify --cpus C0-7,16-23 /system.slice \
     cpuset-modify --cpus C0-7,16-23 /user.slice \
     irq-affinity mask C8-15,24-31 \
-    workqueue-affinity mask C8-15,24-31
+    workqueue-affinity mask C8-15,24-31 \
+    kthread-affinity mask C8-15,24-31
 ```
 
 ### Chaining
@@ -159,16 +160,19 @@ would set governor of CPUs 8-15: schedutil -> performance
   `vfio-isolate: dry run: <command> failed: <reason>` and exit status 1.
 - The preview follows the chain: a cpuset created by an earlier step exists for the later ones (`set cpuset /a (new):
   cpus 8-15`), and task counts that depend on earlier steps are marked `(after earlier steps)`. Other values an
-  earlier step changes (a cpuset's CPUs, a governor, an IRQ's affinity, the workqueue mask, the hugepage pool) are not
+  earlier step changes (a cpuset's CPUs, a governor, an IRQ's affinity, the workqueue mask, a kernel thread's affinity,
+  the hugepage pool) are not
   simulated: the later step shows `(after earlier steps)` instead of the current value, and a precondition that
   depends on them is not evaluated; the preview says `(precondition checked only in a real run: depends on earlier
   steps)`.
 - The CPUs that earlier steps put into isolated cpuset partitions are tracked where they are known exactly (a
   `cpuset-modify --cpus ... --partition isolated` on a cpuset that is not a partition yet, including one created
-  earlier in the chain). A later `workqueue-affinity mask`/`add` then refuses exactly like a real run (exit status 1).
+  earlier in the chain). A later `workqueue-affinity` or `kthread-affinity` `mask`/`add` then refuses exactly like a real run (exit status 1).
   Where the isolation is not exactly known (a partition without `--cpus`, new CPUs for a partition or for the parent
   of one, deleting a partition, a restore step that changes one) the preview shows the note above instead.
-- With `-v`, `irq-affinity` also lists each IRQ that would change (`IRQ 24: 0-31 -> 0-7,16-23`).
+- With `-v`, `irq-affinity` also lists each IRQ that would change (`IRQ 24: 0-31 -> 0-7,16-23`) and
+  `kthread-affinity` each kernel thread (`2 kthreadd: 0-31 -> 0-7,16-31`). Kernel threads that refuse anyway (a race) are
+  only known in a real run.
 - `restore -n FILE` (or `-n restore FILE`; give the option before FILE) reads and validates the journal and prints
   the undo steps, newest record first; the file is not touched. `restore FILE -n` (option after FILE) is a usage
   error. Restore steps are not preconditions-checked, as in a real restore.
@@ -403,6 +407,38 @@ sudo vfio-isolate -u /run/vfio-isolate.undo workqueue-affinity mask C2-5,8-11
 sudo vfio-isolate workqueue-affinity add C2-5,8-11
 ```
 
+### kthread-affinity
+
+`vfio-isolate kthread-affinity mask|add CPUS`
+
+Keeps kernel threads (`kswapd`, `khugepaged`, `kcompactd`, `jbd2/...`, ...) off the VM's CPUs. Kernel threads stay in
+the root cgroup, so cpusets and `move-tasks` cannot do it. The command changes the CPU affinity of `kthreadd`
+(PID 2), whose affinity every new kernel thread inherits, and of every kernel thread that accepts a new affinity. It
+replaces the `taskset -pc ... 2` workaround of older hook scripts, which had no undo and left running kernel threads
+where they were.
+
+- `mask CPUS`: removes the CPUs from each thread's affinity; a thread that would have none left gets all other online CPUs.
+- `add CPUS`: adds the CPUs to each thread's affinity.
+- The kernel threads are listed when the command line is parsed (threads with `PF_KTHREAD` in `/proc/<pid>/stat`);
+  threads created later inherit what `kthreadd` has.
+- Per-CPU kernel threads (`ksoftirqd/N`, `kworker/N:...`, `migration/N`, ...; `PF_NO_SETAFFINITY`) always refuse a new
+  affinity and are skipped, so they appear neither in the output nor in the undo file. A thread that still refuses
+  (`EINVAL`) or that exited meanwhile (`ESRCH`) is only counted (`vfio-isolate: 1 kernel thread exited before it could be
+  moved`; with `-v` each thread is listed). Any other error is reported once; the command fails only if no thread
+  could be changed because of such an unexpected error.
+- Refused while CPUs are in isolated cpuset partitions: the kernel then restricts `kthreadd` itself, and an affinity
+  recorded with a partition active would keep kernel threads off those CPUs after the partition is gone. If combined,
+  put it before the partition step (`kthread-affinity mask ... cpuset-modify --partition isolated ...`).
+- Undo restores each thread's previous affinity. A thread that exited meanwhile, or whose PID now belongs to another
+  process or kernel thread (checked by the thread's start time), is left alone and counts as restored. Restore does
+  not re-check isolation: if a different isolated partition is active at release, `kthreadd`'s previous affinity is
+  restored as recorded (accepted by design).
+
+```sh
+sudo vfio-isolate -u /run/vfio-isolate.undo kthread-affinity mask C8-15,24-31
+sudo vfio-isolate kthread-affinity add C8-15,24-31
+```
+
 ## Recipes
 
 ### Non-NUMA host with systemd
@@ -523,16 +559,14 @@ enable_isolation () {
         cpuset-modify --cpus C$HCPUS /user.slice \
         compact-memory \
         irq-affinity mask C$MCPUS \
-        workqueue-affinity mask C$MCPUS
+        workqueue-affinity mask C$MCPUS \
+        kthread-affinity mask C$MCPUS
 }
 
 disable_isolation () {
     if [ -e "$UNDOFILE" ]; then
         vfio-isolate restore $UNDOFILE
     fi
-
-    # kthreadd reset
-    taskset -pc "$(cat /sys/devices/system/cpu/possible)" 2
 }
 
 case "$2" in
@@ -543,9 +577,6 @@ case "$2" in
         fi
         exit 1
     fi
-
-    # kthreadd only on host cores
-    taskset -pc $HCPUS 2
     ;;
 "started")
     ;;

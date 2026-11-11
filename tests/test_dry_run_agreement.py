@@ -109,6 +109,30 @@ def s_hugepages(host, tmp):
     host.set_hugepages(2048, 100)
 
 
+def s_kthreads(host, tmp):
+    host.add_kthread(2, "kthreadd", affinity="0-7")
+    host.add_kthread(30, "kswapd0", affinity="0-7")
+    host.add_kthread(31, "khugepaged", affinity="4-7")
+    host.add_kthread(40, "ksoftirqd/1", affinity="1", percpu=True)
+    host.add_process(500, "sshd", affinity="0-7")
+
+
+def s_kthreads_isolated(host, tmp):
+    s_kthreads(host, tmp)
+    host.set_workqueue("0-7", isolated="4-7")
+    host.mkcg("a")
+
+
+def s_a_kthreads(host, tmp):
+    s_kthreads(host, tmp)
+    host.mkcg("a")
+
+
+def s_kthread_journal(host, tmp):
+    s_kthreads(host, tmp)
+    seed_journal(host, str(tmp / "r.journal"), [["kthread-affinity", "mask", "C0-1"]])
+
+
 def s_wq_isolated(host, tmp):
     host.set_workqueue("0-7", isolated="4-7")
     host.mkcg("a")
@@ -187,6 +211,17 @@ CASES = [
     ("workqueue-mask", s_none, ["workqueue-affinity", "mask", "C4-7"]),
     ("workqueue-refusal", s_wq_isolated, ["workqueue-affinity", "mask", "C0"]),
     ("workqueue-twice", s_none, ["workqueue-affinity", "mask", "C4-7", "workqueue-affinity", "add", "C6"]),
+    ("kthread-summary", s_kthreads, ["-v", "kthread-affinity", "mask", "C4-5"]),
+    ("kthread-add", s_kthreads, ["-v", "kthread-affinity", "add", "C0-7"]),
+    ("kthread-twice", s_kthreads, ["-v", "kthread-affinity", "mask", "C4-5", "kthread-affinity", "add", "C0"]),
+    ("kthread-refusal", s_kthreads_isolated, ["kthread-affinity", "mask", "C0"]),
+    ("kthread-then-partition", s_a_kthreads,
+     ["-v", "kthread-affinity", "mask", "C4-7", "cpuset-modify", "--cpus", "C4-7", "--partition", "isolated", "/a"]),
+    ("partition-then-kthread", s_a_kthreads,
+     ["cpuset-modify", "--cpus", "C4-7", "--partition", "isolated", "/a", "kthread-affinity", "mask", "C4-7"]),
+    ("partition-no-cpus-then-kthread", s_a_kthreads,
+     ["cpuset-modify", "--partition", "isolated", "/a", "kthread-affinity", "mask", "C0"]),
+    ("restore-kthread", s_kthread_journal, ["-v", "restore", "{J}"]),
     ("drop-compact", s_none, ["drop-caches", "compact-memory"]),
     ("modify-twice", s_a, ["cpuset-modify", "--cpus", "C0-3", "/a",
                            "cpuset-modify", "--cpus", "C0-1", "--mems", "N0", "/a"]),
@@ -267,6 +302,14 @@ EXPECTED_COMPARED = {
     "workqueue-mask": 1,
     "workqueue-refusal": "the preview refuses; no value is printed",
     "workqueue-twice": 1,
+    "kthread-summary": 3,
+    "kthread-add": 1,
+    "kthread-twice": 3,
+    "kthread-refusal": "the preview refuses; no value is printed",
+    "kthread-then-partition": 3,
+    "partition-then-kthread": 2,  # the cpuset-modify values; the kthread-affinity step refuses
+    "partition-no-cpus-then-kthread": 1,  # the cpuset-modify value; the kthread step depends on the partition
+    "restore-kthread": 2,
     "drop-compact": "drop-caches and compact-memory have no current value",
     "modify-twice": 1,
     "modify-twice-systemd": 1,
@@ -296,7 +339,7 @@ EXPECTED_COMPARED = {
 
 
 COMPARABLE = {"cpuset-modify", "cpu-governor", "irq-affinity", "hugepages", "workqueue-affinity",
-              "cpuset-delete", "move-tasks"}
+              "cpuset-delete", "move-tasks", "kthread-affinity"}
 
 
 def readme_expected(argv):
@@ -306,6 +349,7 @@ def readme_expected(argv):
     names = COMPARABLE & set(argv)
     if "add" in argv:
         names.discard("irq-affinity")  # every IRQ of the example host already has those CPUs
+        names.discard("kthread-affinity")  # so does every kernel thread
     return 1 if names or "restore" in argv else 0
 
 
@@ -317,6 +361,9 @@ def readme_setup(host, tmp, argv):
         host.mkcg(cg, cpus="0-31")
     for n in (24, 25, 41):
         host.add_irq(n, "0-31")
+    host.add_kthread(2, "kthreadd", affinity="0-31")
+    host.add_kthread(30, "kswapd0", affinity="0-31")
+    host.add_kthread(40, "ksoftirqd/1", affinity="1", percpu=True)
     creates = "cpuset-create" in argv and "/vfio-test" in argv
     if not creates:
         host.mkcg("vfio-test", cpus="0-31")
@@ -360,8 +407,7 @@ class Recorder:
         def wrapper(c, *args):
             lines = orig(*args)
             batch = attr == "describe_many"
-            dry.append((cls.name, list(lines), len(args[0]) if batch else 1,
-                        False if batch else bool(args[-1].unchecked)))
+            dry.append((cls.name, list(lines), len(args[0]) if batch else 1, bool(args[-1].unchecked)))
             return lines
         monkeypatch.setattr(cls, attr, classmethod(wrapper))
 
@@ -431,6 +477,10 @@ def _old_hugepages(host, p):
     return int((host.root / base / f"hugepages/hugepages-{p.size_kb}kB/nr_hugepages").read_text())
 
 
+def _old_kthread(host, p):
+    return host.thread_affinity(p.pid)
+
+
 def _old_workqueue(host, p):
     return host.workqueue_mask("cpumask_requested").to_list_form()
 
@@ -445,6 +495,7 @@ OLD_READERS = {
     "irq-affinity": _old_irq,
     "hugepages": _old_hugepages,
     "workqueue-affinity": _old_workqueue,
+    "kthread-affinity": _old_kthread,
     "cpuset-delete": lambda host, p: _old_tasks(host, p.cpuset_name),
     "move-tasks": lambda host, p: None if p.pids is not None else _old_tasks(host, p.cpuset_from),
 }
@@ -479,6 +530,10 @@ def unmarked_pairs(name, lines):
             m = re.search(r", now (\S+?)(?:;|$)", line)
             if m:
                 pairs.append(("now", m.group(1)))
+        elif name == "kthread-affinity":
+            m = re.match(r"(\d+) .+: (\S+) -> ", line)
+            if m:
+                pairs.append((int(m.group(1)), m.group(2)))
         elif name == "workqueue-affinity":
             m = re.match(r"set unbound workqueue mask: (.+?) -> ", line)
             if m:
@@ -499,7 +554,7 @@ def real_value(name, pre, key):
         return None
     if name == "cpuset-modify":
         return pre.get(key)
-    if name == "cpu-governor" or name == "irq-affinity":
+    if name in ("cpu-governor", "irq-affinity", "kthread-affinity"):
         return pre
     if name == "hugepages":
         return str(pre)
@@ -523,10 +578,11 @@ def compare_values(rec):
         for _, lines, items, _ in calls:
             chunk = real[pos:pos + items]
             pos += items
-            if name in ("cpu-governor", "irq-affinity"):
+            if name in ("cpu-governor", "irq-affinity", "kthread-affinity"):
                 first = {}
                 for pre, p in chunk:
-                    first.setdefault(p.cpu.number if name == "cpu-governor" else p.irq.number, pre)
+                    first.setdefault({"cpu-governor": lambda p: p.cpu.number, "irq-affinity": lambda p: p.irq.number,
+                                      "kthread-affinity": lambda p: p.pid}[name](p), pre)
                 for key, value in unmarked_pairs(name, lines):
                     if first.get(key) is None:
                         continue
@@ -553,6 +609,8 @@ def cross_check_undo(rec):
         s = steps[0].params
         if name == "cpu-governor":
             assert s.governor == pre
+        elif name == "kthread-affinity":
+            assert s.cpus.to_list_form() == pre
         elif name == "workqueue-affinity":
             assert s.cpus.to_list_form() == pre
         elif name == "cpuset-modify":

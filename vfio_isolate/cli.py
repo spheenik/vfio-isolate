@@ -7,7 +7,7 @@ from dataclasses import dataclass, is_dataclass
 import click
 
 from vfio_isolate.action import *
-from vfio_isolate import cpuset, fsroot, hugepages, journal, output, privileges
+from vfio_isolate import cpuset, fsroot, hugepages, journal, kthread, output, privileges
 from vfio_isolate.privileges import NotRootError
 from vfio_isolate.systemd import SystemctlError
 from vfio_isolate.cpu import CPU
@@ -246,6 +246,37 @@ def workqueue_affinity(executor, **args):
     ))
 
 
+@cli.command('kthread-affinity', help="""keep kernel threads off CPUs
+
+\b
+kthread-affinity mask CPUS  remove the CPUs from the affinity of kthreadd and of
+                            every kernel thread that accepts it; if none would
+                            remain, the thread gets all other CPUs
+kthread-affinity add CPUS   add the CPUs to their affinity
+
+Kernel threads stay in the root cgroup, so cpusets cannot keep them off the VM's
+CPUs. kthreadd (PID 2) creates all kernel threads and they inherit its affinity,
+so threads started later are restricted too. Per-CPU kernel threads refuse a new
+affinity and are skipped. Undo restores each thread's previous
+affinity. Refused while CPUs are in isolated cpuset partitions (the kernel then
+keeps kernel threads off them itself); run it before creating the partition.
+
+""" + CPUS_DOC)
+@click.argument("operation", type=click.Choice(["mask", "add"], case_sensitive=False))
+@click.argument("cpus", metavar="<cpus>", callback=cb_cpu_nodeset)
+@click.pass_obj
+def kthread_affinity(executor, **args):
+    group = object()  # all kernel threads of this command form one failure scope
+    for t in kthread.list_kernel_threads():  # kthreadd first
+        executor.add(KThreadAffinity, KThreadAffinity.Param(
+            operation=KThreadOperation[args["operation"].lower()],
+            pid=t.pid,
+            cpus=args["cpus"],
+            starttime=None,
+            comm=None
+        ), group=group)
+
+
 @cli.command('cpu-governor', help="""set the CPU governor for the given CPUs
 
 The governor is checked against each CPU's available governors before anything runs.
@@ -441,6 +472,9 @@ class Executor:
                 action = pending[0][0]
                 for line in action.describe_many([p for _, p in pending], ctx):
                     print(line if line.startswith(" ") else f"would {line}")
+                if ctx.unchecked:
+                    print(UNCHECKED_NOTE)
+                    ctx.unchecked = False
                 for _, p in pending:
                     ctx.apply(action, p)
                 pending.clear()
@@ -527,10 +561,12 @@ class Executor:
                 if scope is not None and group is not scope:
                     close_scope()
                 if (group is not None and scope is None
-                        and e.action in (IRQAffinity, MoveTasks)):
+                        and e.action in (IRQAffinity, MoveTasks, KThreadAffinity)):
                     scope = group
-                    self._scope_label = ((e.action.name, "IRQ", "changed") if e.action is IRQAffinity
-                                         else (e.action.name, "task", "moved"))
+                    self._scope_label = {IRQAffinity: (e.action.name, "IRQ", "changed"),
+                                         MoveTasks: (e.action.name, "task", "moved"),
+                                         KThreadAffinity: (e.action.name, "kernel thread", "changed")
+                                         }[e.action]
                     output.failures.begin()
                 if isinstance(e, RestoreBatch):
                     self.current = "restore"

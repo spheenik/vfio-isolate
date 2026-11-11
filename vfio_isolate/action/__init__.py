@@ -7,11 +7,12 @@ from .cpuset_modify import CPUSetModify
 from .drop_caches import DropCaches
 from .hugepages import HugePages
 from .irq_affinity import IRQAffinityOperation, IRQAffinity
+from .kthread_affinity import KThreadOperation, KThreadAffinity
 from .move_tasks import MoveTasks
 from .workqueue_affinity import WorkqueueOperation, WorkqueueAffinity
 
 ACTIONS = {cls.name: cls for cls in (
     CompactMemory, CPUGovernor, CPUSetCreate, CPUSetDelete, CPUSetModify,
-    DropCaches, HugePages, IRQAffinity, MoveTasks,
+    DropCaches, HugePages, IRQAffinity, KThreadAffinity, MoveTasks,
     WorkqueueAffinity,
 )}

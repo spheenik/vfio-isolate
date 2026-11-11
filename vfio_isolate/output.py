@@ -33,8 +33,12 @@ class FailureCollector:
                                  "{n} tasks are kernel threads and were not moved"),
         ("task", errno.ESRCH): ("{n} task exited before it could be moved",
                                 "{n} tasks exited before they could be moved"),
+        ("kthread", errno.EINVAL): ("{n} per-CPU kernel thread cannot be moved",
+                                    "{n} per-CPU kernel threads cannot be moved"),
+        ("kthread", errno.ESRCH): ("{n} kernel thread exited before it could be moved",
+                                   "{n} kernel threads exited before they could be moved"),
     }
-    NOUN = {"irq": ("IRQ", "IRQs"), "task": ("task", "tasks")}
+    NOUN = {"irq": ("IRQ", "IRQs"), "task": ("task", "tasks"), "kthread": ("kernel thread", "kernel threads")}
 
     def __init__(self):
         self.reset()
@@ -65,6 +69,9 @@ class FailureCollector:
     def task(self, pid: int, name: str, err: OSError):
         self._add("task", pid, f"{pid} ({name})", err)
 
+    def kthread(self, pid: int, name: str, err: OSError):
+        self._add("kthread", pid, f"{pid} ({name})", err)
+
     def _add(self, kind, ident, label, err):
         key = (kind, err.errno)
         self.scope_attempts += 1
@@ -75,7 +82,8 @@ class FailureCollector:
         self.texts.setdefault(key, os.strerror(err.errno) if err.errno else str(err))
         if key not in self.EXPECTED and key not in self.reported:
             self.reported.add(key)
-            what = f"IRQ {ident}" if kind == "irq" else f"task {label}"
+            what = {"irq": f"IRQ {ident}", "task": f"task {label}",
+                    "kthread": f"kernel thread {label}"}[kind]
             print_error(f"vfio-isolate: warning: {what}: {self.texts[key]}")
 
     def report(self):
