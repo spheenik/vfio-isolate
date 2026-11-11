@@ -197,7 +197,7 @@ class FakeHost:
             if inside(path):
                 entries = list(os.scandir(path))
                 if any(e.is_dir(follow_symlinks=False) for e in entries):
-                    raise OSError(errno.ENOTEMPTY, os.strerror(errno.ENOTEMPTY), os.fspath(path))
+                    raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), os.fspath(path))
                 for e in entries:
                     os.unlink(e.path)
             real_rmdir(path, *args, **kwargs)

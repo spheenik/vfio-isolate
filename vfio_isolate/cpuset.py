@@ -122,6 +122,12 @@ class CPUSet:
     def exists(self) -> bool:
         return os.path.isdir(self.__path())
 
+    def children(self):
+        """Names of the child cgroups (subdirectories), sorted."""
+        base = self.__path()
+        return sorted(self.name().rstrip("/") + "/" + d for d in os.listdir(base)
+                      if os.path.isdir(os.path.join(base, d)))
+
     def remove(self):
         os.rmdir(self.__path())
 
@@ -212,24 +218,26 @@ class CPUSet:
             for pid in f:
                 yield int(pid.strip())
 
-    def add_pid(self, pid: int, silent=False):
+    def add_pid(self, pid: int, silent=False, report=True):
         try:
             if not silent:
                 print_verbose(f"moving PID {pid} to CPUSet {self.name()}")
             with self.open("cgroup.procs", "w") as f:
                 f.write(str(pid))
-            output.failures.ok()
+            if report:
+                output.failures.ok()
             return True
         except OSError as e:
             try:
                 name = psutil.Process(pid).name()
             except psutil.NoSuchProcess:
                 name = "not running"
-            output.failures.task(pid, name, e)
+            if report:
+                output.failures.task(pid, name, e)
             print_debug(f"unable to move PID {pid} ({name}) to CPUSet {self.name()}")
             return False
 
-    def add_all_from_cpuset(self, other):
+    def add_all_from_cpuset(self, other, report=True):
         print_verbose(f"moving all processes from CPUSet {other.name()} to CPUSet {self.name()}")
         for pid in other.pids():
-            self.add_pid(pid, True)
+            self.add_pid(pid, True, report)

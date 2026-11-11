@@ -4,9 +4,6 @@ vfio-isolate is a command line tool for Linux that facilitates CPU and memory is
 with guaranteed latency. It partitions CPUs between the host and a VM (cpusets), moves IRQs away from the VM's CPUs,
 sets the CPU governor, drops caches and compacts memory, and can record how to undo all of it.
 
-> If you are looking for solutions on how to work with the new AMD 79x0X3D models, see
-> [this issue](https://github.com/spheenik/vfio-isolate/issues/14).
-
 For the full option list of any command run `vfio-isolate --help` or `vfio-isolate <command> --help`.
 
 ## Requirements and installation
@@ -48,6 +45,49 @@ vfio-isolate irq-affinity mask Mff00
 Syntax errors, reversed ranges (`C7-0`), ranges ending above 65535, empty sets (`C`, `N`, `M`, `M0`), and CPUs or NUMA
 nodes that do not exist (including `N` nodes without CPUs given as a CPU argument) are usage errors (exit status 2).
 They are reported before anything is changed.
+
+### Choosing CPUs
+
+vfio-isolate does not pick CPUs for you. A common split:
+
+- Give the VM whole physical cores (both SMT threads of each), ideally a whole L3 cache domain (a CCD or CCX on AMD).
+- Keep CPU 0 and its SMT sibling for the host.
+- On NUMA hosts keep the VM's CPUs and its memory on one node.
+
+Read the topology from sysfs:
+
+```sh
+# SMT siblings (one line per CPU)
+grep . /sys/devices/system/cpu/cpu*/topology/thread_siblings_list
+
+# L3 cache domains: CPUs sharing an L3, and its size (index3 is usually L3, so check `level`)
+for c in /sys/devices/system/cpu/cpu[0-9]*/cache/index*; do
+    [ "$(cat $c/level)" = 3 ] && echo "$(cat $c/shared_cpu_list) $(cat $c/size)"
+done | sort -u
+
+# Intel hybrid CPUs only (these files do not exist elsewhere)
+cat /sys/devices/cpu_core/cpus /sys/devices/cpu_atom/cpus
+
+# NUMA nodes
+grep . /sys/devices/system/node/node*/cpulist
+```
+
+`lscpu -e` and `lstopo` (from hwloc) show the same information.
+
+On AMD X3D CPUs with two CCDs, the CCD with the larger L3 is the V-cache CCD. Which side should get it depends on the
+workload; giving it to the VM is a common choice for games. On Intel hybrid CPUs, giving the P-cores to the VM is the
+common choice. This project has not tested X3D or hybrid hardware; treat both as reports from users, not as
+recommendations.
+
+Example: a 16-core/32-thread CPU with two CCDs, CPUs 0-7,16-23 on CCD0 and 8-15,24-31 on CCD1. The host keeps CCD0
+(`C0-7,16-23`), the VM gets CCD1 (`C8-15,24-31`):
+
+```sh
+sudo vfio-isolate -u /run/vfio-isolate.undo \
+    cpuset-modify --cpus C0-7,16-23 /system.slice \
+    cpuset-modify --cpus C0-7,16-23 /user.slice \
+    irq-affinity mask C8-15,24-31
+```
 
 ### Chaining
 
@@ -159,6 +199,9 @@ sudo vfio-isolate -u /run/vfio-isolate.undo cpuset-create --cpus C1-4 --mems N0 
 
 Moves all processes of the cpuset to its parent cpuset, then removes it. Refused for systemd units and `/`. Undo
 recreates the cpuset with its previous cpus and mems; the processes are not moved back.
+
+A cpuset that has child cgroups is refused; delete the children first. A cpuset that is briefly busy (new processes
+appeared after the move) is retried for about 2 seconds, moving the tasks again, before failing with "still in use".
 
 ```sh
 sudo vfio-isolate -u /run/vfio-isolate.undo cpuset-delete /vfio-test
@@ -385,6 +428,18 @@ case "$2" in
     ;;
 esac
 ```
+
+#### AppArmor (Ubuntu)
+
+On Ubuntu the libvirtd AppArmor profile may block the hook from running `vfio-isolate`. Allow it in
+`/etc/apparmor.d/local/usr.sbin.libvirtd` with a line like the following (use the path printed by
+`command -v vfio-isolate`), then reload the profile with `sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.libvirtd`:
+
+```
+/usr/local/bin/vfio-isolate rmix,
+```
+
+Reported by users (#4), not tested by this project.
 
 ## Testing
 

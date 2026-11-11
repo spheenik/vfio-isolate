@@ -49,11 +49,16 @@
 - Per-item failure summaries for `irq-affinity` and `move-tasks` (kernel-managed IRQs, kernel threads, exited tasks),
   with `-v` listing the items; failures that stop a run name the command and the `restore` hint; exit status 130 on
   Ctrl-C.
+- `cpuset-delete` refuses a cpuset that has child cgroups (delete the children first).
+- README section "Choosing CPUs": how to read SMT, L3, hybrid and NUMA topology from sysfs and turn it into
+  arguments (X3D and hybrid hardware are untested by this project).
 - README rewritten with a section per command and checked examples; `--help` texts describe chaining, the root
   requirement, exit statuses and the argument forms.
 
 ### Fixed
 
+- `cpuset-delete` no longer fails occasionally with EBUSY (#9): a briefly busy cpuset is retried for about 2 seconds,
+  moving its tasks again, before failing with "still in use".
 - Undo steps of an action are applied in the right order, which fixes undoing `cpuset-delete` and the IRQ affinities
   restored after `irq-affinity`.
 - `restore` no longer stops at the first failing step; it attempts every step and reports each failure.

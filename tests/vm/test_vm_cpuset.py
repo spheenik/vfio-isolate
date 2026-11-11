@@ -265,3 +265,38 @@ def test_partition_only_on_unit_with_allowed_cpus(j, unit, reset_slice):
     assert eff("vmtest.slice") == "4-7"
     assert main(["restore", j]) == 0
     assert rd("vmtest.slice", "cpuset.cpus.partition").strip() == "member"
+
+
+def test_user_slice_via_systemd_survives_reload_and_restore(j, reset_slice):
+    """user.slice (present because of the root login session) is a systemd unit: cpuset-modify
+    goes through systemd, survives daemon-reload, and restore returns it to unrestricted."""
+    reset_slice("user.slice")
+    assert os.path.isdir(f"{CG}/user.slice"), "guest has no user.slice (no login session?)"
+    root_eff = eff("/")
+    assert allowed_cpus("user.slice") == ""
+    assert main(["-u", j, "cpuset-modify", "--cpus", "C0-3", "/user.slice"]) == 0
+    assert allowed_cpus("user.slice") == "0-3"
+    assert eff("user.slice") == "0-3"
+    sysctl("daemon-reload")
+    assert allowed_cpus("user.slice") == "0-3"
+    assert eff("user.slice") == "0-3"
+    assert main(["restore", j]) == 0
+    assert allowed_cpus("user.slice") == ""
+    assert eff("user.slice") == root_eff
+
+
+def test_delete_with_child_refused(mkcg, cleanup, capsys):
+    """cpuset-delete of a non-systemd cgroup with a child cgroup is refused, naming the child;
+    deleting child then parent works."""
+    mkcg("vmtest-del")
+    cleanup(lambda: _rmdir(f"{CG}/vmtest-del/kid"))
+    assert main(["cpuset-create", "/vmtest-del/kid"]) == 0
+    capsys.readouterr()
+    assert main(["cpuset-delete", "/vmtest-del"]) == 1
+    err = capsys.readouterr().err
+    assert "/vmtest-del/kid" in err
+    assert os.path.isdir(f"{CG}/vmtest-del")
+    assert os.path.isdir(f"{CG}/vmtest-del/kid")
+    assert main(["cpuset-delete", "/vmtest-del/kid"]) == 0
+    assert main(["cpuset-delete", "/vmtest-del"]) == 0
+    assert not os.path.exists(f"{CG}/vmtest-del")

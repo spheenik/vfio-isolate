@@ -1,8 +1,13 @@
+import errno
+import time
 from dataclasses import dataclass
 
 from vfio_isolate import systemd
 from vfio_isolate.cpuset import CPUSet
 from .action import Action, Execution, PreconditionError
+
+REMOVE_TIMEOUT = 2.0
+REMOVE_INTERVAL = 0.05
 
 
 class CPUSetDelete(Action):
@@ -22,7 +27,15 @@ class CPUSetDelete(Action):
             raise PreconditionError(f"cpuset {p.cpuset_name} is managed by systemd")
         if not CPUSet(p.cpuset_name).exists():
             raise PreconditionError(f"cpuset {p.cpuset_name} does not exist")
+        cls._refuse_children(CPUSet(p.cpuset_name))
         return True
+
+    @staticmethod
+    def _refuse_children(cpu_set: CPUSet):
+        children = cpu_set.children()
+        if children:
+            raise PreconditionError(
+                f"cpuset {cpu_set.name()} has child cgroups: {', '.join(children)}")
 
     @classmethod
     def execute(cls, p: Param):
@@ -30,8 +43,24 @@ class CPUSetDelete(Action):
         if not cpu_set.exists():
             # undo of a create that failed before mkdir
             return
-        cpu_set.parent().add_all_from_cpuset(cpu_set)
-        cpu_set.remove()
+        # a task may still be exiting or migrating: retry only EBUSY, only briefly
+        deadline = time.monotonic() + REMOVE_TIMEOUT
+        first = True
+        while True:
+            # report task move failures on the first pass only: retries would count them again
+            cpu_set.parent().add_all_from_cpuset(cpu_set, report=first)
+            first = False
+            try:
+                cpu_set.remove()
+                return
+            except OSError as e:
+                if e.errno != errno.EBUSY:
+                    raise
+                # EBUSY is also what live child cgroups cause (restore skips can_execute)
+                cls._refuse_children(cpu_set)
+            if time.monotonic() >= deadline:
+                raise PreconditionError(f"cpuset {p.cpuset_name} is still in use")
+            time.sleep(REMOVE_INTERVAL)
 
     @classmethod
     def record_undo(cls, p):
