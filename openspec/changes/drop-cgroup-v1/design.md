@@ -52,8 +52,8 @@ call, caches the result, and raises `HostUnsupportedError(message)`. Actions dec
 `needs_cgroup = True` as a class attribute (on CPUSetCreate, CPUSetModify,
 CPUSetDelete and MoveTasks). `Executor.run()` calls `cgroup_root()` once before the
 first execution if any queued action needs it. `restore` does the same for the
-executions it loads. `run_cli()` catches `HostUnsupportedError`, prints the message
-to stderr and exits 1.
+executions it loads (it queues them through the same Executor). `main()` catches
+`HostUnsupportedError`, prints the message to stderr and returns 1.
 *Why*: it meets the spec's "before any change" requirement for whole chains, and
 `--help` never touches cgroups. Checked: `Executor.add` and `restore` only queue, and
 parse-time callbacks read `/proc/irq` and CPU/node sysfs but never cgroup files.
