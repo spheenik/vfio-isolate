@@ -54,6 +54,16 @@ def test_managed_irqs_summarized(host, monkeypatch, capsys):
     assert [aff(host, n) for n in (2, 4, 6)] == ["0-7"] * 3
 
 
+def test_managed_irqs_eperm_summarized(host, monkeypatch, capsys):
+    # kernel 7.2 returns EPERM for IRQs it does not let user space move
+    add_irqs(host, range(1, 5))
+    fail_writes(monkeypatch, irq_path(1, 3), errno.EPERM)
+    assert main(["irq-affinity", "mask", "C0-3"]) == 0
+    err = lines(capsys.readouterr().err)
+    assert err == ["vfio-isolate: 2 IRQs are kernel-managed or not movable and kept their affinity"]
+    assert [aff(host, n) for n in (1, 3)] == ["0-7"] * 2
+
+
 def test_verbose_lists_irq_numbers(host, monkeypatch, capsys):
     add_irqs(host, range(1, 7))
     fail_writes(monkeypatch, irq_path(2, 4, 6), errno.EIO)

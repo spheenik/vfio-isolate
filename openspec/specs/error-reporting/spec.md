@@ -32,7 +32,7 @@ because of it, with one exception: when one `irq-affinity` or `move-tasks` actio
 failures was not an expected one, the run SHALL continue but end with exit status 1 and
 the line `vfio-isolate: <command>: no IRQ could be changed` (or `no task could be moved`). Expected failures SHALL be counted per kind and reported once at the end of
 the run on stderr, one line per kind; with `-v` each item SHALL be listed. Expected
-failures are: IRQ `EIO` (kernel-managed IRQ), IRQ `ENOENT` (IRQ gone), task `EINVAL`
+failures are: IRQ `EIO` or `EPERM` (kernel-managed IRQ; kernel 7.2 returns `EPERM`), IRQ `ENOENT` (IRQ gone), task `EINVAL`
 (kernel thread), task `ESRCH` (task exited). Any other errno SHALL be reported as a
 warning naming the item and the error the first time it occurs for that kind of item;
 further items failing with the same errno SHALL only be counted and summarized at the end.

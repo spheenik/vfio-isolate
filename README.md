@@ -1,8 +1,9 @@
 # vfio-isolate
 
 vfio-isolate is a command line tool for Linux that facilitates CPU and memory isolation for running virtual machines
-with guaranteed latency. It partitions CPUs between the host and a VM (cpusets), moves IRQs away from the VM's CPUs,
-sets the CPU governor, drops caches and compacts memory, and can record how to undo all of it.
+with guaranteed latency. It partitions CPUs between the host and a VM (cpusets), moves IRQs, unbound workqueues and
+kernel threads away from the VM's CPUs, sets the CPU governor, drops caches, compacts memory and reserves hugepages,
+and records how to undo all of it.
 
 For the full option list of any command run `vfio-isolate --help` or `vfio-isolate <command> --help`.
 
@@ -190,7 +191,7 @@ vfio-isolate restore -n /run/vfio-isolate.undo
 - A dry run does not need root where the files it reads are readable by the current user; a value it cannot read is
   shown as `unknown (permission denied)` (or `does not exist`, or the error text). Journals are root-owned and mode 0600, so `restore -n` normally needs root.
 - A dry run cannot know what only the kernel decides: whether it can supply the hugepages, which IRQs refuse the new
-  affinity (`EIO`), which tasks cannot be moved, and whether a cpuset partition is accepted.
+  affinity (`EIO`, or `EPERM` on newer kernels), which tasks cannot be moved, and whether a cpuset partition is accepted.
 
 ### Error reporting and exit statuses
 
@@ -217,7 +218,7 @@ vfio-isolate restore -n /run/vfio-isolate.undo
 
 ## Command reference
 
-All commands are given after the global options `-v`, `-d` and `-u <undo-file>`.
+All commands are given after the global options `-v`, `-d`, `-n` and `-u <undo-file>`.
 
 ### compact-memory
 
@@ -332,17 +333,13 @@ sudo vfio-isolate -u /run/vfio-isolate.undo hugepages 2M 16G
 
 Use 2M pages with this command. They allocate at runtime, are taken only while the VM runs and go back to the
 host when it stops. Tested on a real host with GPU and NVMe passthrough (`hugepages 2M 16G`, all 8192 pages in use
-by the VM) and in a VM with heavily fragmented memory.
+by the VM, started shortly after boot) and in a VM with heavily fragmented memory.
 
 1G pages need physically contiguous gigabytes, and at runtime they usually fail:
 
 - On a desktop host after 11 hours of uptime, `hugepages 1G 8G` got 0 of 8 pages with 31 GB free, with and without
   `compact-memory` first. Unmovable and reclaimable kernel memory is spread over all of RAM, so no free gigabyte is
   left.
-- `hugetlb_cma=<size>` does not help with passthrough. The kernel reserves the area and this command gets its 1G
-  pages from it, but the VM then fails to start with `vfio_container_dma_map(...) = -12 (Cannot allocate memory)`:
-  VFIO pins the VM's memory for DMA, the kernel does not allow pinning pages in a CMA area, and it cannot move 1G
-  pages out of it. Use it only for VMs without passthrough devices.
 - What works is reserving them at boot with `hugepagesz=1G hugepages=N` on the kernel command line, without this
   command. That memory is gone for the host even while the VM is off.
 
@@ -381,53 +378,6 @@ sudo vfio-isolate -u /run/vfio-isolate.undo irq-affinity mask C2-5,8-11
 sudo vfio-isolate irq-affinity add C2-5,8-11
 ```
 
-### move-tasks
-
-`vfio-isolate move-tasks FROM TO`
-
-Moves all tasks from cpuset `FROM` to cpuset `TO`. Kernel threads and tasks that exited meanwhile are skipped and
-summarized. Undo moves back exactly the processes that were in `FROM` when the command ran and are still alive and in
-`TO`; processes that were already in `TO` stay. On systemd hosts prefer restricting slices with `cpuset-modify` over
-moving processes out of their units, which confuses systemd's accounting.
-
-```sh
-sudo vfio-isolate -u /run/vfio-isolate.undo move-tasks /vfio-test /
-```
-
-### restore
-
-`vfio-isolate restore UNDO_FILE`
-
-Undoes the runs recorded in the journal, newest first. Continues past failing steps; deletes the file on success,
-otherwise keeps only the failed steps and exits with status 1. Cannot be combined with `-u`. See
-[Undo journal](#undo-journal).
-
-```sh
-sudo vfio-isolate restore /run/vfio-isolate.undo
-```
-
-### workqueue-affinity
-
-`vfio-isolate workqueue-affinity mask|add CPUS`
-
-Restricts the CPUs that unbound kernel workqueues (writeback, block I/O, crypto, ...) run on, by
-changing `/sys/devices/virtual/workqueue/cpumask`. Per-CPU (bound) kworkers (`kworker/N:...`) cannot be moved and
-are not affected.
-
-- `mask CPUS`: removes the CPUs from the mask.
-- `add CPUS`: adds the CPUs to the mask.
-- The new mask is computed from the last requested mask. A result without any CPU is refused.
-- Refused while CPUs are in isolated cpuset partitions: the kernel already keeps unbound workqueues off them, and
-  writing the mask would lose them from it when the partition is removed. It is not needed with isolated partitions;
-  if combined, put it before the partition step (`workqueue-affinity mask ... cpuset-modify --partition isolated ...`).
-- A result without an online CPU is refused.
-- Undo restores the previous requested mask, minus the CPUs isolated at that time.
-
-```sh
-sudo vfio-isolate -u /run/vfio-isolate.undo workqueue-affinity mask C2-5,8-11
-sudo vfio-isolate workqueue-affinity add C2-5,8-11
-```
-
 ### kthread-affinity
 
 `vfio-isolate kthread-affinity mask|add CPUS`
@@ -458,6 +408,53 @@ where they were.
 ```sh
 sudo vfio-isolate -u /run/vfio-isolate.undo kthread-affinity mask C8-15,24-31
 sudo vfio-isolate kthread-affinity add C8-15,24-31
+```
+
+### move-tasks
+
+`vfio-isolate move-tasks FROM TO`
+
+Moves all tasks from cpuset `FROM` to cpuset `TO`. Kernel threads and tasks that exited meanwhile are skipped and
+summarized. Undo moves back exactly the processes that were in `FROM` when the command ran and are still alive and in
+`TO`; processes that were already in `TO` stay. On systemd hosts prefer restricting slices with `cpuset-modify` over
+moving processes out of their units, which confuses systemd's accounting.
+
+```sh
+sudo vfio-isolate -u /run/vfio-isolate.undo move-tasks /vfio-test /
+```
+
+### workqueue-affinity
+
+`vfio-isolate workqueue-affinity mask|add CPUS`
+
+Restricts the CPUs that unbound kernel workqueues (writeback, block I/O, crypto, ...) run on, by
+changing `/sys/devices/virtual/workqueue/cpumask`. Per-CPU (bound) kworkers (`kworker/N:...`) cannot be moved and
+are not affected.
+
+- `mask CPUS`: removes the CPUs from the mask.
+- `add CPUS`: adds the CPUs to the mask.
+- The new mask is computed from the last requested mask. A result without any CPU is refused.
+- Refused while CPUs are in isolated cpuset partitions: the kernel already keeps unbound workqueues off them, and
+  writing the mask would lose them from it when the partition is removed. It is not needed with isolated partitions;
+  if combined, put it before the partition step (`workqueue-affinity mask ... cpuset-modify --partition isolated ...`).
+- A result without an online CPU is refused.
+- Undo restores the previous requested mask, minus the CPUs isolated at that time.
+
+```sh
+sudo vfio-isolate -u /run/vfio-isolate.undo workqueue-affinity mask C2-5,8-11
+sudo vfio-isolate workqueue-affinity add C2-5,8-11
+```
+
+### restore
+
+`vfio-isolate restore UNDO_FILE`
+
+Undoes the runs recorded in the journal, newest first. Continues past failing steps; deletes the file on success,
+otherwise keeps only the failed steps and exits with status 1. Cannot be combined with `-u`. See
+[Undo journal](#undo-journal).
+
+```sh
+sudo vfio-isolate restore /run/vfio-isolate.undo
 ```
 
 ## Recipes
@@ -561,7 +558,7 @@ when the undo file exists.
 #!/bin/bash
 
 # change to your libvirt domain name
-VM=win10
+VM=win11
 [ "$1" = "$VM" ] || exit 0
 
 HCPUS=0-6,16-22

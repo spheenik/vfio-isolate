@@ -28,6 +28,9 @@ class FailureCollector:
     EXPECTED = {
         ("irq", errno.EIO): ("{n} IRQ is kernel-managed or not movable and kept its affinity",
                              "{n} IRQs are kernel-managed or not movable and kept their affinity"),
+        # kernel 7.2 refuses the same IRQs with EPERM instead of EIO
+        ("irq", errno.EPERM): ("{n} IRQ is kernel-managed or not movable and kept its affinity",
+                               "{n} IRQs are kernel-managed or not movable and kept their affinity"),
         ("irq", errno.ENOENT): ("{n} IRQ is gone", "{n} IRQs are gone"),
         ("task", errno.EINVAL): ("{n} task is a kernel thread and was not moved",
                                  "{n} tasks are kernel threads and were not moved"),
