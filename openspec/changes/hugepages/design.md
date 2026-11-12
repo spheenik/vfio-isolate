@@ -73,8 +73,9 @@ same action with `release=True`).
 ## Risks
 
 - 1G pages at runtime are unreliable on a long-running host; the command reports it
-  rather than fixing it. The README recommendation for 1G (boot reservation or
-  `hugetlb_cma=`) waits for tests on real hardware.
+  rather than fixing it. Host test 2026-11-12: 0 of 8 1G pages after 11 h uptime;
+  `hugetlb_cma=` reserved and allocated fine, but VFIO cannot pin CMA pages, so the
+  VM did not start. README recommends 2M at runtime, 1G only as a boot reservation.
 - A signal during the add: in a VM probe, SIGINT and SIGTERM sent while 1700 2M pages
   were being allocated did not cut the allocation short; the kernel finished it, the
   process exited 130/143, and the journal record matched the pool. Whether a fatal signal

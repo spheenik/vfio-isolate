@@ -22,5 +22,5 @@
 
 ## 4. After host tests (user at home)
 
-- [ ] 4.1 Host test: runtime 1G allocation after uptime; reboot with `hugetlb_cma=`, check dmesg and allocation
-- [ ] 4.2 README 1G recommendation from those results
+- [x] 4.1 Host test: runtime 1G allocation after uptime; reboot with `hugetlb_cma=`, check dmesg and allocation
+- [x] 4.2 README 1G recommendation from those results

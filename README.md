@@ -319,8 +319,9 @@ VM is gone.
   got and leaves no undo record, so a `restore` of the same undo file afterwards is safe.
 - Runs of vfio-isolate are serialized by a lock (`/run/vfio-isolate.lock`), so two hooks starting at the same time
   do not race on the pool.
-- To use the pages, QEMU needs hugepage backing; for libvirt add `<memoryBacking><hugepages/></memoryBacking>` to
-  the domain XML.
+- To use the pages, QEMU needs hugepage backing; for libvirt add
+  `<memoryBacking><hugepages><page size='2048' unit='KiB'/></hugepages></memoryBacking>` to the domain XML.
+  Without hugepage backing, the pool stays unused and only takes memory away from the host.
 
 ```sh
 sudo vfio-isolate -u /run/vfio-isolate.undo hugepages 2M 16G
@@ -328,12 +329,24 @@ sudo vfio-isolate -u /run/vfio-isolate.undo hugepages 2M 16G
 
 #### 2M or 1G
 
-2M pages allocate reliably at runtime; this was tested in a VM with heavily fragmented memory. 1G pages need
-physically contiguous gigabytes and at runtime often only partly succeed, with varying results per boot;
-`compact-memory` does not help when the fragmentation comes from unmovable kernel memory. For 1G pages, reserve them
-at boot (`hugepagesz=1G hugepages=N` on the kernel command line, and do not use this command for them) or reserve a
-CMA area with `hugetlb_cma=<size>` and check with `dmesg | grep hugetlb_cma` that the reservation succeeded. This
-1G recommendation is tested only in a VM so far.
+Use 2M pages with this command. They allocate at runtime, are taken only while the VM runs and go back to the
+host when it stops. Tested on a real host with GPU and NVMe passthrough (`hugepages 2M 16G`, all 8192 pages in use
+by the VM) and in a VM with heavily fragmented memory.
+
+1G pages need physically contiguous gigabytes, and at runtime they usually fail:
+
+- On a desktop host after 11 hours of uptime, `hugepages 1G 8G` got 0 of 8 pages with 31 GB free, with and without
+  `compact-memory` first. Unmovable and reclaimable kernel memory is spread over all of RAM, so no free gigabyte is
+  left.
+- `hugetlb_cma=<size>` does not help with passthrough. The kernel reserves the area and this command gets its 1G
+  pages from it, but the VM then fails to start with `vfio_container_dma_map(...) = -12 (Cannot allocate memory)`:
+  VFIO pins the VM's memory for DMA, the kernel does not allow pinning pages in a CMA area, and it cannot move 1G
+  pages out of it. Use it only for VMs without passthrough devices.
+- What works is reserving them at boot with `hugepagesz=1G hugepages=N` on the kernel command line, without this
+  command. That memory is gone for the host even while the VM is off.
+
+The gain of 1G over 2M pages is one level less of address translation; for a gaming VM it is likely small, and with
+transparent hugepages (on by default) the VM already gets 2M pages for much of its memory.
 
 ### irq-affinity
 
