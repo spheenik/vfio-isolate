@@ -544,8 +544,18 @@ Undo restores the previous partition type (on the systemd route a previously uns
 systemd units, `root` and `isolated` need `--cpus` unless the unit already has `AllowedCPUs`. If the installed systemd
 does not support `CPUSetPartition=`, the command fails before any change.
 
-Pin vCPUs only to CPUs inside the partition. This recipe has not been tested with a running libvirt VM: the partition
-itself is tested in a VM, but how libvirt's per-vCPU pinning behaves inside an isolated `machine.slice` is not.
+Pin vCPUs only to CPUs inside the partition. Tested with a libvirt VM (kernel 7.2, systemd 262, the XML above, 16
+vCPUs, GPU and NVMe passthrough) through the [libvirt hook](#libvirt-hook) with this chain in place of its
+`cpuset-modify`, `workqueue-affinity` and `kthread-affinity` lines:
+
+- The partition was valid, each vCPU thread ran on its pinned CPU, and the host slices stayed on 0-6,16-22.
+- The kernel itself kept unbound workqueues and `kthreadd` off the partition, so `workqueue-affinity` and
+  `kthread-affinity` are not needed with it.
+- `restore` at VM shutdown brought every value back.
+- Without load balancing, QEMU's emulator threads are not spread over the CPUs of `emulatorpin`: with `7,23`, six of
+  seven sat on CPU 7. Give `emulatorpin` and `iothreadpin` one CPU each (for example `7` and `23`) so that they do not
+  share one CPU while the other stays idle.
+- Whether the partition lowers latency compared with the plain recipe above has not been measured.
 
 ### libvirt hook
 
