@@ -4,7 +4,7 @@ from typing import Generator
 import psutil
 
 from vfio_isolate import fsroot
-from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet
+from vfio_isolate.nodeset import CPUNodeSet, NUMANodeSet, format_mask
 from vfio_isolate import output
 from vfio_isolate.output import print_debug
 
@@ -56,6 +56,24 @@ class IRQS:
         for file in os.listdir(IRQ.base_path()):
             if file.isnumeric():
                 yield IRQ(int(file))
+
+
+def _default_path() -> str:
+    return fsroot.path("/proc/irq/default_smp_affinity")
+
+
+def default_affinity_exists() -> bool:
+    return os.path.exists(_default_path())
+
+
+def read_default_affinity() -> CPUNodeSet:
+    with open(_default_path()) as f:
+        return CPUNodeSet.from_mask(f.read())
+
+
+def write_default_affinity(cpus: CPUNodeSet):
+    with open(_default_path(), "w") as f:
+        f.write(format_mask(cpus))
 
 
 IRQBALANCE_WARNING = ("vfio-isolate: warning: irqbalance is running and will overwrite IRQ affinities; stop it or ban the "

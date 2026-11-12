@@ -199,15 +199,17 @@ def test_irq_summary_and_verbose(host, capsys):
     host.add_irq(27, "4-7")
     rc, out, err = run(["-n", "irq-affinity", "mask", "C4-7"], capsys)
     assert rc == 0, err
-    assert out.splitlines() == ["would change affinity of 4 of 4 IRQs (mask 4-7)"]
+    assert out.splitlines() == ["would set default IRQ affinity: 0-7 -> 0-3",
+                                "would change affinity of 4 of 4 IRQs (mask 4-7)"]
     rc, out, err = run(["-n", "-v", "irq-affinity", "mask", "C4-5"], capsys)
     lines = out.splitlines()
-    assert lines[0] == "would change affinity of 4 of 4 IRQs (mask 4-5)"
-    assert sorted(lines[1:]) == ["  IRQ 24: 0-7 -> 0-3,6-7", "  IRQ 25: 0-7 -> 0-3,6-7",
+    assert lines[0] == "would set default IRQ affinity: 0-7 -> 0-3,6-7"
+    assert lines[1] == "would change affinity of 4 of 4 IRQs (mask 4-5)"
+    assert sorted(lines[2:]) == ["  IRQ 24: 0-7 -> 0-3,6-7", "  IRQ 25: 0-7 -> 0-3,6-7",
                                  "  IRQ 26: 0-7 -> 0-3,6-7", "  IRQ 27: 4-7 -> 6-7"]
     # an IRQ that would not change is not counted
     rc, out, err = run(["-n", "irq-affinity", "add", "C0-7"], capsys)
-    assert out.splitlines() == ["would change affinity of 1 of 4 IRQs (add 0-7)"]
+    assert out.splitlines() == ["would change affinity of 1 of 4 IRQs (add 0-7)"]  # default already has 0-7
 
 
 def test_irq_unreadable_is_unknown(host, monkeypatch, capsys):
@@ -351,8 +353,11 @@ def test_irq_mask_then_add(host, capsys):
         host.add_irq(n, "0-7")
     rc, out, err = run(["-n", "irq-affinity", "mask", "C0-3", "irq-affinity", "add", "C0"], capsys)
     assert rc == 0, err
-    assert out.splitlines() == ["would change affinity of 2 of 2 IRQs (mask 0-3)",
-                                "would change affinity of 0 of 2 IRQs (add 0); 2 depend on earlier steps"]
+    assert out.splitlines() == [
+        "would set default IRQ affinity: 0-7 -> 4-7",
+        "would change affinity of 2 of 2 IRQs (mask 0-3)",
+        "would set default IRQ affinity: (after earlier steps) -> the current default plus 0",
+        "would change affinity of 0 of 2 IRQs (add 0); 2 depend on earlier steps"]
 
 
 def test_restore_records_do_not_merge_and_depend(host, j, capsys):
@@ -367,8 +372,10 @@ def test_restore_records_do_not_merge_and_depend(host, j, capsys):
     lines = out.splitlines()
     # one record per IRQ: the records stay separate descriptions, never merged into one summary
     assert lines[1:3] == ["would change affinity of 1 of 1 IRQ (add 4-5)"] * 2
+    assert lines[3] == "would set default IRQ affinity: 6-7 -> 4-7"
     # the older records touch IRQs an earlier (newer) restore step already changed
-    assert lines[3:5] == ["would change affinity of 0 of 1 IRQ (add 0-3); 1 depends on earlier steps"] * 2
+    assert lines[4:6] == ["would change affinity of 0 of 1 IRQ (add 0-3); 1 depends on earlier steps"] * 2
+    assert lines[6] == "would set default IRQ affinity: (after earlier steps) -> the current default plus 0-3"
     assert open(j, "rb").read() == before
 
 

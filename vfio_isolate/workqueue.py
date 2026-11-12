@@ -2,22 +2,11 @@
 import os
 
 from vfio_isolate import fsroot
-from vfio_isolate.nodeset import CPUNodeSet
+from vfio_isolate.nodeset import CPUNodeSet, format_mask
 
 
 def _path(name: str) -> str:
     return fsroot.path("/sys/devices/virtual/workqueue", name)
-
-
-def format_mask(cpus: CPUNodeSet) -> str:
-    """Kernel hex mask: comma-separated 32-bit groups, highest first."""
-    nodes = set(cpus)
-    groups = (max(nodes) // 32 + 1) if nodes else 1
-    parts = []
-    for g in reversed(range(groups)):
-        value = sum(1 << (n - g * 32) for n in nodes if n // 32 == g)
-        parts.append(f"{value:08x}")
-    return ",".join(parts)
 
 
 def _read_mask(name: str) -> CPUNodeSet:

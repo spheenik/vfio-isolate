@@ -44,6 +44,10 @@
 - `kthread-affinity mask|add CPUS` keeps kernel threads off the VM's CPUs (#6): it changes the affinity of `kthreadd`
   (which new kernel threads inherit) and of every kernel thread that accepts it; per-CPU threads are skipped; undo restores each thread's previous affinity. Refused while CPUs are in isolated cpuset partitions. The
   libvirt hook recipe uses it instead of `taskset -pc ... 2`, which had no undo.
+- `irq-affinity` also restricts `/proc/irq/default_smp_affinity`, so IRQs created later (QEMU's VFIO IRQs, requested
+  after the libvirt `prepare` hook) start off the VM's CPUs. Undo is relative (gives back only the CPUs this run
+  removed); a `mask` that leaves no online CPU in the default is refused. IRQs created while the VM runs are not
+  journaled and keep the restricted affinity after `restore`.
 - `irq-affinity` warns once per command when `irqbalance` is running, since it overwrites IRQ affinities.
 - `hugepages [--node N<n>] PAGESIZE AMOUNT` adds pages to the hugepage pool (#2, #10); undo releases them again. If
   the kernel provides fewer pages than asked, the command fails, releases what it got and leaves no undo record.

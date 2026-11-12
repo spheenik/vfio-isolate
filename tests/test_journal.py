@@ -7,7 +7,8 @@ from vfio_isolate import journal
 from vfio_isolate.action import (ACTIONS, Execution, CompactMemory, CPUGovernor, CPUSetCreate,
                                  CPUSetDelete, CPUSetModify, DropCaches, IRQAffinity,
                                  IRQAffinityOperation, MoveTasks, HugePages,
-                                 WorkqueueAffinity, WorkqueueOperation, KThreadAffinity, KThreadOperation)
+                                 WorkqueueAffinity, WorkqueueOperation, KThreadAffinity, KThreadOperation,
+                                 IRQDefaultAffinity, DefaultAffinityOperation)
 from vfio_isolate.cpu import CPU
 from vfio_isolate.irq import IRQ
 from vfio_isolate.journal import JournalError, encode, decode
@@ -40,6 +41,10 @@ def all_executions():
         Execution(KThreadAffinity, KThreadAffinity.Param(operation=KThreadOperation.restore, pid=1234,
                                                          cpus=CPUNodeSet("0-7,16-31"), starttime=98765,
                                                          comm="kworker/u16:2-events")),
+        Execution(IRQDefaultAffinity, IRQDefaultAffinity.Param(operation=DefaultAffinityOperation.mask,
+                                                               cpus=CPUNodeSet("8-15"))),
+        Execution(IRQDefaultAffinity, IRQDefaultAffinity.Param(operation=DefaultAffinityOperation.add,
+                                                               cpus=CPUNodeSet("0-7,36"))),
         Execution(HugePages, HugePages.Param(size_kb=2048, node=None, count=8, release=False)),
         Execution(HugePages, HugePages.Param(size_kb=1048576, node=0, count=2, release=True)),
     ]
@@ -48,7 +53,7 @@ def all_executions():
 def test_registry_names():
     assert set(ACTIONS) == {"cpuset-create", "cpuset-modify", "cpuset-delete", "move-tasks",
                             "irq-affinity", "cpu-governor", "drop-caches", "compact-memory", "hugepages",
-                            "workqueue-affinity", "kthread-affinity"}
+                            "workqueue-affinity", "kthread-affinity", "irq-default-affinity"}
     for name, cls in ACTIONS.items():
         assert cls.name == name
 

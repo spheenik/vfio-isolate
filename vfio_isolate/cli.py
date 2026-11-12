@@ -217,6 +217,10 @@ irq-affinity add CPUS   add the CPUs to each IRQ's affinity
 def irq_affinity(executor, **args):
     if irq_module.irqbalance_running():
         click.echo(irq_module.IRQBALANCE_WARNING, err=True)
+    executor.add(IRQDefaultAffinity, IRQDefaultAffinity.Param(
+        operation=DefaultAffinityOperation[args["operation"].name],
+        cpus=args["cpus"]
+    ))
     group = object()  # all IRQs of this command form one failure scope
     for irq in IRQS.active():
         executor.add(IRQAffinity, IRQAffinity.Param(

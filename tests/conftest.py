@@ -71,6 +71,9 @@ class FakeHost:
             for base in ("sys/kernel/mm", f"{node}/node0"):
                 self._write(f"{base}/hugepages/hugepages-{size}kB/nr_hugepages", "0\n")
         (self.root / "proc/irq").mkdir(parents=True, exist_ok=True)
+        from vfio_isolate.nodeset import CPUNodeSet, format_mask
+        self._write("proc/irq/default_smp_affinity",
+                    format_mask(CPUNodeSet(set(range(self.num_cpus)))) + "\n")
         (self.root / "proc/sys/vm").mkdir(parents=True, exist_ok=True)
         self._write("proc/sys/vm/drop_caches", "0")
         self._write("proc/sys/vm/compact_memory", "0")
@@ -322,6 +325,15 @@ class FakeHost:
         (d / "cpuset.cpus.partition").write_text("member\n")
         (d / "cpuset.cpus.effective").write_text(cpus + "\n")
         (d / "cpuset.mems.effective").write_text(mems + "\n")
+
+    def default_irq_affinity(self):
+        """/proc/irq/default_smp_affinity as a CPUNodeSet."""
+        from vfio_isolate.nodeset import CPUNodeSet
+        return CPUNodeSet.from_mask((self.root / "proc/irq/default_smp_affinity").read_text())
+
+    def set_default_irq_affinity(self, cpus: str):
+        from vfio_isolate.nodeset import CPUNodeSet, format_mask
+        self._write("proc/irq/default_smp_affinity", format_mask(CPUNodeSet(cpus)) + "\n")
 
     def add_irq(self, number: int, affinity: str = "0-7"):
         """Create /proc/irq/<number>/smp_affinity_list (irq-affinity iterates /proc/irq)."""

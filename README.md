@@ -150,6 +150,7 @@ vfio-isolate -n -u /run/vfio-isolate.undo \
 ```
 would record undo in /run/vfio-isolate.undo
 would set unit system.slice (systemd): AllowedCPUs 0-31 -> 0-7,16-23
+would set default IRQ affinity: 0-31 -> 0-7,16-31
 would change affinity of 41 of 57 IRQs (mask 8-15)
 would set unbound workqueue mask: 0-31 -> 0-7,16-31
 would add 16G in 2M pages (8192) to the pool, now 0; whether the kernel can supply them shows only in a real run
@@ -352,13 +353,20 @@ transparent hugepages (on by default) the VM already gets 2M pages for much of i
 
 `vfio-isolate irq-affinity mask|add CPUS`
 
-Changes the affinity of all active IRQs.
+Changes the affinity of all active IRQs. It first applies the same operation to `/proc/irq/default_smp_affinity`,
+the affinity every IRQ gets when it is created.
 
+- The default matters because IRQs created later start with it: QEMU requests the VFIO IRQs after the libvirt
+  `prepare` hook has run, so without it they land on the VM's CPUs.
+- A `mask` that would leave no online CPU in the default is refused before anything changes (exit status 1).
 - `mask CPUS`: removes the CPUs from each IRQ's affinity. If none would remain, the IRQ gets all other CPUs.
 - `add CPUS`: adds the CPUs to each IRQ's affinity.
 - Kernel-managed IRQs cannot be moved; they keep their affinity and are summarized (see
   [Error reporting](#error-reporting-and-exit-statuses)).
-- Undo restores each IRQ's previous affinity.
+- Undo restores each IRQ's previous affinity. For the default it is relative: it gives back only the CPUs this run
+  removed (or removes only the CPUs it added), so overlapping VMs do not hand each other's CPUs back.
+- IRQs created while the VM runs are not journaled: host IRQs created in that window (hotplug, driver reload) keep
+  the restricted affinity after the restore. VFIO IRQs disappear with QEMU.
 - `irqbalance` rewrites IRQ affinities periodically and so silently undoes this command. If a process named
   `irqbalance` is running, the command prints one warning to stderr per invocation (and still runs). Either stop it
   around the VM (`systemctl stop irqbalance`, start it again afterwards) or ban the VM's CPUs in its configuration with

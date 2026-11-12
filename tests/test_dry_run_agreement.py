@@ -357,6 +357,7 @@ def readme_setup(host, tmp, argv):
     """The fake host the README examples run on (as in test_readme_dry_run), fresh per example."""
     host.enable_systemd(units={"system.slice": "/system.slice", "user.slice": "/user.slice",
                                "init.scope": "/init.scope", "machine.slice": "/machine.slice"})
+    host._write("sys/devices/system/node/node0/cpulist", "0-15\n")  # N0 must not be every CPU
     for cg in ("host", "vm"):
         host.mkcg(cg, cpus="0-31")
     for n in (24, 25, 41):

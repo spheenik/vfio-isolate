@@ -37,6 +37,7 @@ def test_readme_invocations_dry_run_is_read_only(fake_host_factory, tmp_path, ca
     host.patch_cgroup_fs()
     sd = host.enable_systemd(units={"system.slice": "/system.slice", "user.slice": "/user.slice",
                                     "init.scope": "/init.scope", "machine.slice": "/machine.slice"})
+    host._write("sys/devices/system/node/node0/cpulist", "0-15\n")  # N0 must not be every CPU
     for cg in ("host", "vm"):
         host.mkcg(cg, cpus="0-31")
     for n in (24, 25, 41):
