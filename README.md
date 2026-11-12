@@ -9,7 +9,7 @@ For the full option list of any command run `vfio-isolate --help` or `vfio-isola
 ## Requirements and installation
 
 - Linux with cgroup v2 (the unified hierarchy) and the `cpuset` controller available. cgroup v1 is not supported
-  since 0.6; v1 users stay on 0.5.2: `pip install vfio-isolate==0.5.2`.
+  since 1.0; v1 users stay on 0.5.2: `pip install vfio-isolate==0.5.2`.
 - Python 3.9 or newer.
 - Root. Every run that queues a command, and `restore`, is refused with `vfio-isolate: must be run as root` (exit
   status 1) for other users. `--help` and usage errors do not need root.

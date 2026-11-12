@@ -43,14 +43,14 @@ rewritten with the failed steps otherwise.
 - **THEN** the `--cpus` help mentions `C`, `N` and `M`
 
 ### Requirement: Breaking changes are recorded
-`CHANGELOG.md` SHALL list, per released version from 0.6.0 on, the breaking changes and
-the new behavior. For 0.6.0 it SHALL name every breaking change recorded in the archived
+`CHANGELOG.md` SHALL list, per released version from 1.0.0 on, the breaking changes and
+the new behavior. For 1.0.0 it SHALL name every breaking change recorded in the archived
 proposals, at least: cgroup v1 and the v1-only options removed (stay on 0.5.2), hex masks
 under `C` replaced by `M`, undo files in a new format with 0.5.x files refused, `-u`
 appending to an existing file, root required.
 
 #### Scenario: Upgrading user
-- **WHEN** a 0.5.x user reads the 0.6.0 entry
+- **WHEN** a 0.5.x user reads the 1.0.0 entry
 - **THEN** it tells them each breaking change and what to do instead
 
 ### Requirement: README explains how to choose CPUs
